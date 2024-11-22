@@ -4,7 +4,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import struct
-import datetime
 import argparse
 import scipy.signal as signal
 
