@@ -6,14 +6,13 @@ from scipy.signal import medfilt
 import pandas as pd
 from datetime import datetime
 import os
-from raw_plot import decode_data_packet
+from sa_common import decode_data_packet
 import argparse
+
 
 SAMPLE_RATE = 10000  # Hertz
 u4max = 4294967295
 
-SAPATH="/Volumes/Extreme_SSD/SA_SYNC/20240902/"
-SAOUT = "/Volumes/Extreme_SSD/SA_SYNC/20240829/"
 
 def compress_all(nc_grids, min_dims=1):
     for var in nc_grids:
@@ -162,7 +161,7 @@ def add_other_time_vars(ds):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
     parser.add_argument('-i', '--input', nargs='+', required=True, help='Path or paths to slow antenna files to convert.')
-    parser.add_argument('--sensor-num', help='The bowl number of the sensor that collected the data. Optional if the CPU ID is present in the file name.', type=int)
+    parser.add_argument('-s', '--sensor-num', help='The bowl number of the sensor that collected the data. Optional if the CPU ID is present in the file name.', type=int)
     parser.add_argument('-o', '--output', required=True, help='Directory to save netCDF output files.')
     args = parser.parse_args()
 
@@ -178,7 +177,6 @@ if __name__ == '__main__':
     prev_hr = None
     do_write = False
     for filename in sorted(files):
-        print(filename)
         # T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:-6], "%Y%m%d%H%M%S_%f"))
         T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:22],"%Y%m%d_%H%M%S_%f"))
         print(T0)
