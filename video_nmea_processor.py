@@ -174,19 +174,29 @@ if __name__ == '__main__':
         except pynmea2.ChecksumError as e:
             this_nmea_msg = None
         nmea_times.append(this_nmea_time)
+        nmea_lats.append(this_nmea_lat)
+        nmea_lons.append(this_nmea_lon)
         
 
     # Keep only the NMEA sentences with valid times, and drop duplicates
     unique_nmea_times = []
     unique_nmea_frames = []
+    unique_nmea_lats = []
+    unique_nmea_lons = []
     for i, this_nmea_time in enumerate(nmea_times):
         if this_nmea_time is not None:
             this_nmea_frame = nmea_frames[i]
+            this_nmea_lat = nmea_lats[i]
+            this_nmea_lon = nmea_lons[i]
             if this_nmea_time not in unique_nmea_times:
                 unique_nmea_times.append(this_nmea_time.astimezone(timezone.utc).replace(tzinfo=None))
                 unique_nmea_frames.append(this_nmea_frame)
+                unique_nmea_lats.append(this_nmea_lat)
+                unique_nmea_lons.append(this_nmea_lon)
     unique_nmea_times = np.array(unique_nmea_times).astype('datetime64[s]')
     unique_nmea_frames = np.array(unique_nmea_frames)
+    unique_nmea_lats = np.array(unique_nmea_lats)
+    unique_nmea_lons = np.array(unique_nmea_lons)
     # Find the elapsed time of the unique NMEA frames
     unique_nmea_elapsed = gps_nonzero_elapsed[unique_nmea_frames]
 
@@ -203,13 +213,19 @@ if __name__ == '__main__':
     frame_elapsed = np.array([frame['pts_time'] for frame in frame_elapsed_json['frames']], dtype=float)
 
     # Interpolate the NMEA times to the frame times
-    interper = interp1d(actual_nmea_elapsed, unique_nmea_times.astype('datetime64[ns]').astype(float), fill_value='extrapolate')
-    frame_absolute_times = interper(frame_elapsed).astype('datetime64[ns]')
+    tinterper = interp1d(actual_nmea_elapsed, unique_nmea_times.astype('datetime64[ns]').astype(float), fill_value='extrapolate')
+    frame_absolute_times = tinterper(frame_elapsed).astype('datetime64[ns]')
+    latinterper = interp1d(actual_nmea_elapsed, unique_nmea_lats, fill_value='extrapolate')
+    frame_latitudes = latinterper(frame_elapsed)
+    loninterper = interp1d(actual_nmea_elapsed, unique_nmea_lons, fill_value='extrapolate')
+    frame_longitudes = loninterper(frame_elapsed)
+
 
     # Write the CSV if requested
     if args.output_csv is not None:
         print('Writing CSV...')
-        pl.DataFrame({'frame' : np.arange(len(frame_absolute_times)), 'elapsed' : frame_elapsed, 'time' : frame_absolute_times}).write_csv(args.output_csv)
+        pl.DataFrame({'frame' : np.arange(len(frame_absolute_times)), 'elapsed' : frame_elapsed, 'time' : frame_absolute_times,
+                      'latitude' : frame_latitudes, 'longitude' : frame_longitudes}).write_csv(args.output_csv)
     
     # Overlay the times on the video if requested
     if args.output_video is not None:
@@ -228,7 +244,7 @@ if __name__ == '__main__':
                 break
 
             # Overlay the text on the frame
-            text = frame_texts[frame_index]
+            text = f'{frame_texts[frame_index]} {frame_latitudes[frame_index]:.5f} {frame_longitudes[frame_index]:.5f}'
             font = cv2.FONT_HERSHEY_SIMPLEX
             bottomLeftCornerOfText = (10, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) - 10) # Bottom-left corner of the text string in the image
             fontScale = 1
