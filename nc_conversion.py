@@ -264,6 +264,6 @@ if __name__ == '__main__':
         ds['lat'].attrs['long_name'] = 'Latitude of the sensor'
         ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
         ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
-        ds['relay'].attrs['long_name'] = 'Active relay of the ADC'
+        ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
         comp_ds = compress_all(ds)
         comp_ds.to_netcdf(os.path.join(args.output, fileoutname))
