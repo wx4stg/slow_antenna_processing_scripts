@@ -161,7 +161,11 @@ def add_other_time_vars(ds):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
     parser.add_argument('-i', '--input', nargs='+', required=True, help='Path or paths to slow antenna files to convert.')
-    parser.add_argument('-s', '--sensor-num', help='The bowl number of the sensor that collected the data. Optional if the CPU ID is present in the file name.', type=int)
+    parser.add_argument('-s', '--sensor-num', required=True, help='The ADC number of the sensor that collected the data.', type=int)
+    parser.add_argument('--latitude', type=float, help='Latitude of the sensor. Overridden if the latitude is present in the file name.')
+    parser.add_argument('--longitude', type=float, help='Longitude of the sensor. Overridden if the longitude is present in the file name.')
+    parser.add_argument('--altitude', type=float, help='Altitude of the sensor. Overridden if the altitude is present in the file name.')
+    parser.add_argument('-r', '--relay', help='Relay used (a/b/c). Overridden if the relay is present in the file name.', type=str)
     parser.add_argument('-o', '--output', required=True, help='Directory to save netCDF output files.')
     args = parser.parse_args()
 
@@ -173,14 +177,31 @@ if __name__ == '__main__':
 
     # Count of all rollovers
     total_rollovers = 0
-    # First adc_ready value in the whole sequence 
-    prev_hr = None
-    do_write = False
-    for filename in sorted(files):
-        # T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:-6], "%Y%m%d%H%M%S_%f"))
-        T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:22],"%Y%m%d_%H%M%S_%f"))
-        print(T0)
-        if prev_hr is None: prev_hr = T0.hour
+    for i, filepath in enumerate(sorted(files)):
+        sensor_lat = args.latitude if args.latitude else np.nan
+        sensor_lon = args.longitude if args.longitude else np.nan
+        sensor_alt = args.altitude if args.altitude else np.nan
+        sensor_relay = args.relay if args.relay else np.nan
+        filename = os.path.basename(filepath)
+        fn_split = filename.replace('.raw', '').split('_')
+        if len(fn_split) == 2:
+            # This is an "old" rawfile
+            T0 = datetime.strptime(fn_split[0]+"_"+fn_split[1], "%Y%m%d%H%M%S_%f")
+        elif len(fn_split) == 3:
+            # This is a "March 2024" rawfile
+            T0 = datetime.strptime(fn_split[0]+"_"+fn_split[1], "%Y%m%d%H%M%S_%f")
+            sensor_relay = fn_split[2]
+        elif len(fn_split) == 9:
+            # This is a "July 2024" rawfile
+            T0 = datetime.strptime(fn_split[0]+"_"+fn_split[1]+"_"+fn_split[2], "%Y%m%d_%H%M%S_%f")
+            sensor_lat = float(fn_split[3]) if fn_split[3] != 'NO' else np.nan
+            sensor_lon = float(fn_split[4]) if fn_split[4] != 'FIX' else np.nan
+            sensor_alt = float(fn_split[5]) if fn_split[5] != '2Donly' else np.nan
+            if sensor_alt == 0.0:
+                sensor_alt = np.nan
+            sensor_relay = fn_split[8]
+        else:
+            raise ValueError(f'Unknown format of file: {filename}')
 
         # Read and decode raw data
         data_raw_packets=[]
@@ -188,7 +209,7 @@ if __name__ == '__main__':
         data_packet_length = 8
         data_packets = []
         this_packet_length = data_packet_length + 1
-        with open(filename, mode = 'rb') as file:
+        with open(filepath, mode = 'rb') as file:
             ba = file.read()
         for i in range(len(ba) - data_packet_length):
             if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
@@ -203,9 +224,7 @@ if __name__ == '__main__':
         adc_ready += total_rollovers*u4max
         total_rollovers += new_rolls
 
-        print(adc_ready[0])
-        print(adc_ready[-1])
-        time_orig = T0 + (adc_ready-adc_ready[0]).astype('timedelta64[us]')
+        time_orig = np.array([T0]).astype('datetime64[ns]')[0] + (adc_ready-adc_ready[0]).astype('timedelta64[us]')
 
         # Sensor measurements from the ADC. 24 bit sensor, so 32 bit int will be fine.
         adc = np.asarray([dp['adc_reading'] for dp in data_packets]).astype('int32')
@@ -216,6 +235,35 @@ if __name__ == '__main__':
             'time_orig_method':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
         
         ds = interpolate_across_system_times(add_other_time_vars(ds))
-        fileoutname = T0.strftime("%Y%m%d%H%M%S_%f")+"_"+sensorname+"_"+os.path.basename(filename)[23:-4]+".nc"
+        fileoutname = f'SA{args.sensor_num}_{T0.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
+        ds = ds.assign_coords({'sensor_num' : [args.sensor_num]})
+        match sensor_relay:
+            case 'a':
+                sensor_relay = 0
+            case 'b':
+                sensor_relay = 1
+            case 'c':
+                sensor_relay = 2
+            case _:
+                raise ValueError(f'Unknown relay: {sensor_relay}')
+        ds = ds.assign(
+            lat = ('sensor_num', np.array([sensor_lat])),
+            lon = ('sensor_num', np.array([sensor_lon])),
+            alt = ('sensor_num', np.array([sensor_alt])),
+            relay = ('sensor_num', np.array([sensor_relay]))
+        )
+        ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
+        ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
+        ds['pps_micro'].attrs['units'] = 'microseconds'
+        ds['time_orig_method'].attrs['long_name'] = 'Time of the ADC sample in UTC'
+        ds['time'].attrs['long_name'] = 'Time of the ADC sample in UTC, corrected for system time errors'
+        ds['dt_system'].attrs['long_name'] = 'Time offset of the Linux system clock, relative to the first sample'
+        ds['dt_system'].attrs['units'] = 'seconds'
+        ds['dt_adc'].attrs['long_name'] = 'Time offset of the ADC local reference clock, relative to the first sample'
+        ds['dt_adc'].attrs['units'] = 'seconds'
+        ds['lat'].attrs['long_name'] = 'Latitude of the sensor'
+        ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
+        ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
+        ds['relay'].attrs['long_name'] = 'Active relay of the ADC'
         comp_ds = compress_all(ds)
-        comp_ds.to_netcdf(fileoutname)
+        comp_ds.to_netcdf(os.path.join(args.output, fileoutname))
