@@ -6,7 +6,7 @@ from scipy.signal import medfilt
 import pandas as pd
 from datetime import datetime
 import os
-from sa_common import decode_data_packet
+import sa_common
 import argparse
 
 
@@ -35,11 +35,11 @@ def correct_micros(micros, fs, tol=0.1, window=7):
     
     Two things can result in time that does not increase steadily.
     1. Random read errors, which may be positive or negative. 
-       These are embedded in a steadily increasing ramp, so the 
-       median of these samples (for a large enough window)
-       Within window we expect these erros to be significantly differnt from the median
+        These are embedded in a steadily increasing ramp, so the 
+        median of these samples (for a large enough window)
+        Within window we expect these erros to be significantly differnt from the median
     2. Integer rollover, which results in an instananeous change of -u4_int_max
-        
+
     First, run a median filter to eliminate most spikes. If the number of errors in the
     window is larger than (window-1)/2, then the window will have an incorrect value.
     But this value will be much smaller than the integer max, allowing us to isolate the
@@ -50,7 +50,7 @@ def correct_micros(micros, fs, tol=0.1, window=7):
     Near the jump this code gives 
     [4294967292, 4294967293, 4294967294, 4294967294, 1, 1, 2, 3]
     i.e., the delta remains large.
-        
+
     At the edges of the dataset, we have to be more careful. 
     After correcting the middle of the dataset, check for bad data one more time.
     If found, simply extrapolate using the floor of the mean sample rate.
@@ -64,7 +64,6 @@ def correct_micros(micros, fs, tol=0.1, window=7):
         change = np.diff(m)
         return (change < 0) & (change > int(tol*nominal_dt_micro))
 
-     
     # Median filter, and promote to 64 bit int
     med_micro = medfilt(micros, window).astype('i8')
     
@@ -173,11 +172,12 @@ if __name__ == '__main__':
     if len(files) == 1:
         files = glob(files[0])
     else:
-        files = sorted(files)
+        files = files
+    files = sorted(files)
 
     # Count of all rollovers
     total_rollovers = 0
-    for i, filepath in enumerate(sorted(files)):
+    for i, filepath in enumerate(files):
         sensor_lat = args.latitude if args.latitude else np.nan
         sensor_lon = args.longitude if args.longitude else np.nan
         sensor_alt = args.altitude if args.altitude else np.nan
@@ -204,22 +204,12 @@ if __name__ == '__main__':
             raise ValueError(f'Unknown format of file: {filename}')
 
         # Read and decode raw data
-        data_raw_packets=[]
-        data_start_bytes = []
-        data_packet_length = 8
-        data_packets = []
-        this_packet_length = data_packet_length + 1
-        with open(filepath, mode = 'rb') as file:
-            ba = file.read()
-        for i in range(len(ba) - data_packet_length):
-            if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
-                data_start_bytes.append(i)
-        data_raw_packets.extend([ba[sb:sb+this_packet_length] for sb in data_start_bytes[:-1]])
-        data_packets = [decode_data_packet(b) for b in data_raw_packets]
-
-        # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter
-        adc_ready, new_rolls = correct_micros(np.asarray([dp['adc_pps_micros'] for dp in data_packets]),
-                                SAMPLE_RATE)
+        if i == 0:
+            raw_data = sa_common.read_SA_file(filepath)
+        else:
+            raw_data = sa_common.read_SA_file(filepath, previous_file=files[i-1])
+        adc_pps_micros, adc_reading = sa_common.decode_SA_array(raw_data)
+        adc_ready, new_rolls = correct_micros(adc_pps_micros, SAMPLE_RATE)
         # Add on the cumulative rollovers from previous files
         adc_ready += total_rollovers*u4max
         total_rollovers += new_rolls
@@ -232,7 +222,7 @@ if __name__ == '__main__':
         ds = xr.Dataset(pd.DataFrame(
             {'ADC':adc,
             'pps_micro':adc_ready,
-            'time_orig_method':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
+            'time_uncorrected':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
         
         ds = interpolate_across_system_times(add_other_time_vars(ds))
         fileoutname = f'SA{args.sensor_num}_{T0.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
@@ -255,7 +245,7 @@ if __name__ == '__main__':
         ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
         ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
         ds['pps_micro'].attrs['units'] = 'microseconds'
-        ds['time_orig_method'].attrs['long_name'] = 'Time of the ADC sample in UTC'
+        ds['time_uncorrected'].attrs['long_name'] = 'Time reported by the ADC clock'
         ds['time'].attrs['long_name'] = 'Time of the ADC sample in UTC, corrected for system time errors'
         ds['dt_system'].attrs['long_name'] = 'Time offset of the Linux system clock, relative to the first sample'
         ds['dt_system'].attrs['units'] = 'seconds'

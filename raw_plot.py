@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import scipy.signal as signal
-from sa_common import decode_data_packet
+import sa_common
 
 def notch_sixty(s, fs):
     f0 = 60.0  # Frequency to be removed from signal (Hz)
@@ -23,34 +23,22 @@ if __name__ == '__main__':
     parser.add_argument(
         '-o', '--output', help='Output path to save plots. If unspecified, plot will be opened in matplotlib show() window.', default=None)
     args = parser.parse_args()
-    filenames = args.input
-    ba = b''
-    for filename in filenames:
-        with open(filename, mode='rb') as file:
-            this_file_bytes = file.read()
-        ba = ba + this_file_bytes
+    filenames = sorted(args.input)
+    all_data = []
+    all_times = []
+    for i, filename in enumerate(filenames):
+        if i == 0:
+            this_file = sa_common.read_SA_file(filename)
+        else:
+            this_file = sa_common.read_SA_file(filename, previous_file=filenames[i-1])
+        this_times, this_data = sa_common.decode_SA_array(this_file)
+        all_times.append(this_times)
+        all_data.append(this_data)
+    adc = np.concatenate(all_data, axis=0)
+    adc_ready = np.concatenate(all_times, axis=0)
 
-    data_start_bytes = []
-    data_packet_length = 8
-    # Determine the valid starting bytes for data packets
-    for i in range(len(ba) - data_packet_length):
-        if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
-            data_start_bytes.append(i)
-
-    this_packet_length = data_packet_length + 1
-    data_raw_packets = [ba[sb:sb+this_packet_length]
-                        for sb in data_start_bytes[:-1]]
-    data_packets = [decode_data_packet(b) for b in data_raw_packets]
-
-    starts = [dp['start_byte'] for dp in data_packets]
-    adc_ready = [dp['adc_pps_micros'] for dp in data_packets]
-    adc = [dp['adc_reading'] for dp in data_packets]
-    end = [dp['end_byte'] for dp in data_packets]
-
-    starts = np.array(starts)
     adc_ready = signal.medfilt(np.array(adc_ready), 7)
     adc = signal.medfilt(np.array(adc), 7)
-    end = np.array(end)
     delta_t_adc = (adc_ready[-1]-adc_ready[0])*1e-6
     sample_rate = 1.0e6/np.median(np.ediff1d(adc_ready))
     print(
