@@ -12,24 +12,25 @@ def read_SA_file(file_to_read, packet_length=9, previous_file=None):
         # The ADC packet has a header of 'BE' and a footer of 'EF' (190 = BE, 239 = EF)
         # So look for a footer immediately followed by a header,
         # followed by another footer/header pair 9 bytes later
-        if byte == 239 and this_bytes[j + 1] == 190 and this_bytes[j + packet_length] == 239 and this_bytes[j + packet_length + 1] == 190:
-            length_to_include = ((this_bytes[j+1:].shape[0]) // packet_length) * packet_length
-            adc_packets = this_bytes[j+1:length_to_include+j+1].reshape(-1, packet_length)
+        if byte == 190 and this_bytes[j+packet_length-1] == 239 and this_bytes[j+packet_length] == 190:
+            length_to_include = ((this_bytes[j:].shape[0]) // packet_length) * packet_length
+            adc_packets = this_bytes[j:length_to_include+j].reshape(-1, packet_length)
             # Now check all of the first and last columns to make sure they are all headers and footers respectively
             if np.all(adc_packets[:, 0] == 190) and np.all(adc_packets[:, -1] == 239):
                 break
-    if previous_file:
+        if j >= packet_length:
+            raise ValueError('Could not find first ADC packet in file.')
+    if previous_file and j > 0:
         with open(previous_file, 'rb') as f:
-            f.seek(-j, 2)
-            last_ba = f.read(j)
+            f.seek(-packet_length+j, 2)
+            last_ba = f.read()
         last_bytes = np.frombuffer(last_ba, dtype=np.uint8)
-        first_packet_recovered = np.append(last_bytes, this_bytes[:j+1])
-        if first_packet_recovered.shape[0] == packet_length:
-            first_packet_recovered = first_packet_recovered.reshape(-1, packet_length)
-            if first_packet_recovered[0, 0] == 190 and first_packet_recovered[0, -1] == 239:
-                adc_packets = np.append(first_packet_recovered, adc_packets, axis=0)
-            else:
-                print('First packet not recovered')
+        first_packet_recovered = np.append(last_bytes, this_bytes[:j])
+        first_packet_recovered = first_packet_recovered.reshape(-1, packet_length)
+        if first_packet_recovered[0, 0] == 190 and first_packet_recovered[0, -1] == 239:
+            adc_packets = np.append(first_packet_recovered, adc_packets, axis=0)
+        else:
+            print('First packet not recovered')
     return adc_packets
 
 def decode_SA_array(data_array):
