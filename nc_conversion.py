@@ -10,7 +10,7 @@ import sa_common
 import argparse
 
 
-SAMPLE_RATE = 10000  # Hertz
+SAMPLE_RATE = 9600  # Hertz
 u4max = 4294967295
 
 
@@ -148,12 +148,12 @@ def interpolate_across_system_times(ds, SAMPLE_RATE=10000):
                              jump_idx,
                              adc_minus_system[jump_idx])
     correction = offset_curve - adc_minus_system
-    ds['time'] = ds.time_orig_method - (correction*1e9).astype('timedelta64[ns]')
+    ds['time'] = ds.time_uncorrected - (correction*1e9).astype('timedelta64[ns]')
     return ds
     
     
 def add_other_time_vars(ds):
-    ds['dt_system'] = (ds.time_orig_method-ds.time_orig_method[0]).astype('datetime64[ns]').astype('f8')/1e9
+    ds['dt_system'] = (ds.time_uncorrected-ds.time_uncorrected[0]).astype('datetime64[ns]').astype('f8')/1e9
     ds['dt_adc'] = (ds.pps_micro - ds.pps_micro[0]).astype('f8')/1e6
     return ds
 
@@ -208,16 +208,13 @@ if __name__ == '__main__':
             raw_data = sa_common.read_SA_file(filepath)
         else:
             raw_data = sa_common.read_SA_file(filepath, previous_file=files[i-1])
-        adc_pps_micros, adc_reading = sa_common.decode_SA_array(raw_data)
+        adc_pps_micros, adc = sa_common.decode_SA_array(raw_data)
         adc_ready, new_rolls = correct_micros(adc_pps_micros, SAMPLE_RATE)
         # Add on the cumulative rollovers from previous files
         adc_ready += total_rollovers*u4max
         total_rollovers += new_rolls
 
         time_orig = np.array([T0]).astype('datetime64[ns]')[0] + (adc_ready-adc_ready[0]).astype('timedelta64[us]')
-
-        # Sensor measurements from the ADC. 24 bit sensor, so 32 bit int will be fine.
-        adc = np.asarray([dp['adc_reading'] for dp in data_packets]).astype('int32')
             
         ds = xr.Dataset(pd.DataFrame(
             {'ADC':adc,
