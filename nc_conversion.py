@@ -10,7 +10,7 @@ import sa_common
 import argparse
 
 
-SAMPLE_RATE = 9600  # Hertz
+SAMPLE_RATE = 10000#9600  # Hertz
 u4max = 4294967295
 
 
@@ -184,6 +184,7 @@ if __name__ == '__main__':
         sensor_relay = args.relay if args.relay else np.nan
         filename = os.path.basename(filepath)
         fn_split = filename.replace('.raw', '').split('_')
+        sensor_id = str(fn_split[-2])
         if len(fn_split) == 2:
             # This is an "old" rawfile
             T0 = datetime.strptime(fn_split[0]+"_"+fn_split[1], "%Y%m%d%H%M%S_%f")
@@ -202,15 +203,16 @@ if __name__ == '__main__':
             sensor_relay = fn_split[8]
         else:
             raise ValueError(f'Unknown format of file: {filename}')
-
         # Read and decode raw data
-        if i == 0:
-            raw_data = sa_common.read_SA_file(filepath)
-        else:
-            raw_data = sa_common.read_SA_file(filepath, previous_file=files[i-1])
-        adc_pps_micros, adc = sa_common.decode_SA_array(raw_data)
+
+        data_packets = sa_common.old_readSAfile(filepath) 
+        adc_pps_micros = np.asarray([dp['adc_pps_micros'] for dp in data_packets])
+
+        adc = np.asarray([dp['adc_reading'] for dp in data_packets]).astype('int32')
+
+    
         adc_ready, new_rolls = correct_micros(adc_pps_micros, SAMPLE_RATE)
-        # Add on the cumulative rollovers from previous files
+    #     # Add on the cumulative rollovers from previous files
         adc_ready += total_rollovers*u4max
         total_rollovers += new_rolls
 
@@ -220,10 +222,11 @@ if __name__ == '__main__':
             {'ADC':adc,
             'pps_micro':adc_ready,
             'time_uncorrected':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
-        
+    # ds = add_other_time_vars(ds)   
         ds = interpolate_across_system_times(add_other_time_vars(ds))
+        print(ds['dt_system'][0:10].values)
         fileoutname = f'SA{args.sensor_num}_{T0.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
-        ds = ds.assign_coords({'sensor_num' : [args.sensor_num]})
+        ds = ds.assign_coords({'sensor_num' : [args.sensor_num]})        
         match sensor_relay:
             case 'a':
                 sensor_relay = 0
@@ -237,7 +240,8 @@ if __name__ == '__main__':
             lat = ('sensor_num', np.array([sensor_lat])),
             lon = ('sensor_num', np.array([sensor_lon])),
             alt = ('sensor_num', np.array([sensor_alt])),
-            relay = ('sensor_num', np.array([sensor_relay]))
+            relay = ('sensor_num', np.array([sensor_relay])),
+            PIid = ('sensor_num', np.array([str(sensor_id)]))
         )
         ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
         ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
@@ -252,5 +256,7 @@ if __name__ == '__main__':
         ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
         ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
         ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
-        comp_ds = compress_all(ds)
-        comp_ds.to_netcdf(os.path.join(args.output, fileoutname))
+        ds['PIid'].attrs['long_name'] = 'Raspberry pi id number'
+#         comp_ds = compress_all(ds)
+#         comp_ds.to_netcdf(os.path.join(args.output, fileoutname))
+        ds.to_netcdf(os.path.join(args.output, fileoutname))

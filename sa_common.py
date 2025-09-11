@@ -55,6 +55,21 @@ def convert_adc_to_decimal(value):
     return value
 
 
+def old_readSAfile(filepath):
+    data_raw_packets=[]
+    data_start_bytes = []
+    data_packet_length = 8
+    data_packets = []
+    this_packet_length = data_packet_length + 1
+    with open(filepath, mode = 'rb') as file:
+        ba = file.read()
+    for i in range(len(ba) - data_packet_length):
+        if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
+            data_start_bytes.append(i)
+    data_raw_packets.extend([ba[sb:sb+this_packet_length] for sb in data_start_bytes[:-1]])
+    data_packets = [decode_data_packet(b) for b in data_raw_packets]
+    return data_packets    
+    
 def decode_data_packet(mp):
     result = dict()
     result['start_byte'] = struct.unpack('B', mp[0:1])[0]
