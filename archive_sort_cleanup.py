@@ -82,11 +82,13 @@ if __name__ == '__main__':
             # -1 = invalid, 0 = SA_log.out, 1 = time only (old old), 2 = time, relay (old), 3 = time, location, CPU, GPS err, relay (current)
             filename_spec = np.zeros(len(sensor_dir_content), dtype=int)
             cpu_ids = np.zeros(len(sensor_dir_content), dtype=int)
+            all_lons = np.full(len(sensor_dir_content), np.nan, dtype=float)
+            all_lats = np.full(len(sensor_dir_content), np.nan, dtype=float)
+            all_alts = np.full(len(sensor_dir_content), np.nan, dtype=float)
             for i, psbl_rawfile in enumerate(sensor_dir_content_names):
                 fs = path.getsize(sensor_dir_content[i])
                 if fs == 0:
-                    pass
-                    # remove file
+                    delete_file(sensor_dir_content[i], reason='0-byte file', dry_run=dry_run)
                 if psbl_rawfile in ['SA_log.out', 'cronjobs_help.sh', 'cronlog.txt', 'cronlog.out', 'data_collect.py']:
                     filename_spec[i] = 0
                     continue
@@ -101,44 +103,68 @@ if __name__ == '__main__':
                     this_file_dt = dt.strptime(psbl_rawfile, '%Y%m%d%H%M%S_%f.raw')
                     this_file_relay = None # TODO: figure this out from the SA_log.out or cronlog.txt or cronlog.out or data_collect.py, if available
                     # TODO: maybe read this info from some sort of user-provided csv and convert to a "2" or "3" spec filename automatically
-                    this_file_lat = None
-                    this_file_lon = None
-                    this_file_alt = None
-                    this_file_gps_err = None
+                    all_lons[i] = np.nan
+                    all_lats[i] = np.nan
+                    all_alts[i] = np.nan
+                    this_file_gps_err = 0 # if there is no GPS data, the error is defined to be 0
                     cpu_ids[i] = 0
                 elif len(rawfile_split) == 3:
                     # this is an 'old' file type
                     filename_spec[i] = 2
                     this_file_dt = dt.strptime(rawfile_split[0]+rawfile_split[1], '%Y%m%d%H%M%S%f')
-                    this_file_lat = None
-                    this_file_lon = None
-                    this_file_alt = None
-                    this_file_gps_err = None
+                    all_lons[i] = np.nan
+                    all_lats[i] = np.nan
+                    all_alts[i] = np.nan
+                    this_file_gps_err = 0
                     cpu_ids[i] = 0
                     this_file_relay = rawfile_split[2]
                 elif len(rawfile_split) == 9:
                     # this is a current filename
                     filename_spec[i] = 3
                     this_file_dt = dt.strptime(rawfile_split[0]+rawfile_split[1]+rawfile_split[2], '%Y%m%d%H%M%S%f')
-                    this_file_lat = None if rawfile_split[3] == 'NO' else float(rawfile_split[3])
-                    this_file_lon = None if rawfile_split[4] == 'FIX' else float(rawfile_split[4])
-                    this_file_alt = None if rawfile_split[5] == '2Donly' else float(rawfile_split[5])
-                    this_file_gps_err = float(rawfile_split[6])
+                    all_lats[i] = np.nan if rawfile_split[3] == 'NO' else float(rawfile_split[3])
+                    all_lons[i] = None if rawfile_split[4] == 'FIX' else float(rawfile_split[4])
+                    all_alts[i] = None if rawfile_split[5] == '2Donly' else float(rawfile_split[5])
+                    this_file_gps_err = float(rawfile_split[6]) if ~np.isnan(all_lons[i]) else 0
                     cpu_ids[i] = int(rawfile_split[7], 16)
                     this_file_relay = rawfile_split[8]
                 elif len(rawfile_split) == 6:
                     # This is a current file with no GPS... see https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3
                     filename_spec[i] = 3
                     this_file_dt = dt.strptime(rawfile_split[0]+rawfile_split[1]+rawfile_split[2], '%Y%m%d%H%M%S%f')
-                    this_file_lat = None
-                    this_file_lon = None
-                    this_file_alt = None
-                    this_file_gps_err = float(rawfile_split[3])
+                    all_lons[i] = np.nan
+                    all_lats[i] = np.nan
+                    all_alts[i] = np.nan
+                    this_file_gps_err = float(rawfile_split[3]) if ~np.isnan(all_lons[i]) else 0
                     cpu_ids[i] = int(rawfile_split[4], 16)
                     this_file_relay = rawfile_split[5]
-                    new_file_name = f'{this_file_dt.strftime("%Y%m%d_%H%M%S_%f")}_NO_FIX_2Donly_{this_file_gps_err}_{cpu_ids[i]:x}_{this_file_relay}.raw'
+                    new_file_name = f'{this_file_dt.strftime("%Y%m%d_%H%M%S_%f")}_NO_FIX_2Donly_{this_file_gps_err:.2f}_{cpu_ids[i]:x}_{this_file_relay}.raw'
                     new_file_path = sensor_dir_content[i].replace(psbl_rawfile, new_file_name)
                     move_file(sensor_dir_content[i], new_file_path, reason='Fix for https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3', dry_run=dry_run)
+                # Attempt to recover location if missing
+                if np.any(np.isnan([all_lats[i], all_lons[i], all_alts[i]])):
+                    no_fix_filename = f'{this_file_dt.strftime("%Y%m%d_%H%M%S_%f")}_NO_FIX_2Donly_{this_file_gps_err:.2f}_{cpu_ids[i]:x}_{this_file_relay}.raw'
+                    no_fix_path = path.join(sensor_dir, no_fix_filename)
+                    if path.exists(no_fix_path):
+                        lons_to_avg = []
+                        lats_to_avg = []
+                        alts_to_avg = []
+                        if i != 0:
+                            lons_to_avg.append(all_lons[i-1])
+                            lats_to_avg.append(all_lats[i-1])
+                            alts_to_avg.append(all_alts[i-1])
+                        if i != (len(sensor_dir_content)-1):
+                            lons_to_avg.append(all_lons[i+1])
+                            lats_to_avg.append(all_lats[i+1])
+                            alts_to_avg.append(all_alts[i+1])
+                        if len(lons_to_avg) > 0:
+                            this_file_lon = np.nanmean(lons_to_avg)
+                            this_file_lat = np.nanmean(lats_to_avg)
+                            this_file_alt = np.nanmean(alts_to_avg)
+                            if np.all([~np.isnan(this_file_lon), ~np.isnan(this_file_lat), ~np.isnan(this_file_alt)]):
+                                new_file_name = f'{this_file_dt.strftime("%Y%m%d_%H%M%S_%f")}_{this_file_lat:.3f}_{this_file_lon:.3f}_{this_file_alt:.1f}_{this_file_gps_err:.2f}_{cpu_ids[i]:x}_{this_file_relay}.raw'
+                                new_file_path = sensor_dir_content[i].replace(psbl_rawfile, new_file_name)
+                                move_file(no_fix_path, new_file_path, reason='recovered GPS location from neighboring files', dry_run=dry_run)
                 # Detect misplaced rawfile dates
                 if this_file_dt.replace(hour=0, minute=0, second=0, microsecond=0) != this_date.replace(hour=0,	minute=0, second=0, microsecond=0):
                     new_file_path = path.join(archive_root, this_file_dt.strftime('%Y%m%d'), path.basename(sensor_dir), psbl_rawfile)
@@ -170,8 +196,6 @@ if __name__ == '__main__':
 
     # TODO: Create a log of CPU IDs and sensor numbers to move sensor IDs to the correct locations
     # TODO: Find dates of old deployments and associate lat/lon and maybe even CPU ID to convert to new file format
-    # TODO: Do the same for files with NO_FIX
-    # TODO: find 0-byte files and remove them
     # TODO: plot time differences between files to find gaps and misplaced files
     # TODO: incorporate LMA based pruning of unininteresting data
     # TODO: remove empty directories
