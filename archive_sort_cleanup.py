@@ -13,6 +13,38 @@ parser.add_argument('--archive-root', '-r', type=str, required=True, default='/m
 parser.add_argument('--lma-data', '-l', type=str, default=None, help='Directory containing LMA data for correlation with slow antenna data. Leave unspecified to skip pruning.')
 parser.add_argument('--dry-run', '-n', action='store_true', help='Log actions without making any changes.')
 
+
+def delete_file(file_path, reason=None, dry_run=True):
+    if reason is not None:
+        reason_str = f' ({reason})'
+    else:
+        reason_str = ''
+    if dry_run:
+        print(f'Would remove {file_path}{reason_str}')
+    else:
+        print(f'Removing {file_path}{reason_str}')
+        if path.isdir(file_path):
+            rmdir(file_path)
+        else:
+            remove(file_path)
+
+def move_file(old_path, new_path, reason=None, dry_run=True):
+    if reason is not None:
+        reason_str = f' ({reason})'
+    else:
+        reason_str = ''
+    if dry_run:
+        print(f'Would move {old_path} to {new_path}{reason_str}')
+    else:
+        print(f'Moving {old_path} to {new_path}{reason_str}')
+        rename(old_path, new_path)
+
+def unhandleable_file(message, dry_run=True):
+    if dry_run:
+        print(f'Would raise error: {message}')
+    else:
+        raise ValueError(message)
+
 if __name__ == '__main__':
     args = parser.parse_args()
 
@@ -32,32 +64,19 @@ if __name__ == '__main__':
             this_date = dt.strptime(path.basename(date_dir), '%Y%m%d')
         except ValueError as e:
             if 'does not match format' in str(e):
-                if dry_run:
-                    print(f'Would remove {date_dir} (first level directory does not conform to date format string YYYYMMDD/)')
-                else:
-                    print(f'Removing {date_dir}')
-                    rmdir(date_dir)
+                delete_file(date_dir, reason='first level directory does not conform to date format string YYYYMMDD/', dry_run=dry_run)
         sensor_dirs = sorted(glob(path.join(date_dir, '*')))
+        this_date_ids = dict()
         for sensor_dir in sensor_dirs:
             if path.basename(sensor_dir).startswith('sensor_') and len(path.basename(sensor_dir)) == 9:
                 try:
                     sensor_num = int(sensor_dir[-2:])
                 except Exception as e:
-                    print(str(e))
-                    print('-----')
-                    if dry_run:
-                        print(f'Would remove {sensor_dir} (second level directory does not conform to format sensor_XX)')
-                    else:
-                        print(f'Removing {sensor_dir}')
-                        rmdir(sensor_dir)
+                    delete_file(sensor_dir, reason='second level directory does not conform to format sensor_XX', dry_run=dry_run)
             else:
-                if dry_run:
-                    print(f'Would remove {sensor_dir} (second level directory does not conform to format sensor_XX)')
-                else:
-                    print(f'Removing {sensor_dir}')
-                    rmdir(sensor_dir)
+                delete_file(sensor_dir, reason='second level directory does not conform to format sensor_XX', dry_run=dry_run)
             if str(sensor_num).zfill(2) != sensor_dir[-2:]:
-                raise ValueError('Directory {sensor_dir} does not conform to format sensor_XX, but I\'m not sure what to do with it')
+                unhandleable_file(f'Directory {sensor_dir} does not conform to format sensor_XX, but I\'m not sure what to do with it', dry_run=dry_run)
             sensor_dir_content = sorted(glob(path.join(sensor_dir, '*')))
             sensor_dir_content_names = [path.basename(s) for s in sensor_dir_content]
             # -1 = invalid, 0 = SA_log.out, 1 = time only (old old), 2 = time, relay (old), 3 = time, location, CPU, GPS err, relay (current)
@@ -73,11 +92,7 @@ if __name__ == '__main__':
                     continue
                 if not (psbl_rawfile.endswith('.raw') & ('_' in psbl_rawfile)):
                     filename_spec[i] = -1
-                    if dry_run:
-                        print(f'Would remove {sensor_dir_content[i]} (content of sensor dir is not a raw data file or SA_log.out)')
-                    else:
-                        print(f'Removing {sensor_dir_content[i]}')
-                        remove(sensor_dir_content[i])
+                    delete_file(sensor_dir_content[i], reason='content of sensor dir is not a raw data or log file', dry_run=dry_run)
                     continue                    
                 rawfile_split = psbl_rawfile.replace('.raw', '').split('_')
                 if len(rawfile_split) == 2:
@@ -123,35 +138,38 @@ if __name__ == '__main__':
                     this_file_relay = rawfile_split[5]
                     new_file_name = f'{this_file_dt.strftime("%Y%m%d_%H%M%S_%f")}_NO_FIX_2Donly_{this_file_gps_err}_{cpu_ids[i]:x}_{this_file_relay}.raw'
                     new_file_path = sensor_dir_content[i].replace(psbl_rawfile, new_file_name)
-                    if dry_run:
-                        print(f'Would move {sensor_dir_content[i]} to {new_file_path} (Fix for https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3)')
-                    else:
-                        print(f'Moving {sensor_dir_content[i]} to {new_file_path}')
-                        rename(sensor_dir_content[i], new_file_path)
+                    move_file(sensor_dir_content[i], new_file_path, reason='Fix for https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3', dry_run=dry_run)
                 # Detect misplaced rawfile dates
                 if this_file_dt.replace(hour=0, minute=0, second=0, microsecond=0) != this_date.replace(hour=0,	minute=0, second=0, microsecond=0):
                     new_file_path = path.join(archive_root, this_file_dt.strftime('%Y%m%d'), path.basename(sensor_dir), psbl_rawfile)
-                    if dry_run:
-                        print(f'Would move {sensor_dir_content[i]} to {new_file_path} (file has different date than parent directory)')
-                    else:
-                        print(f'Moving {sensor_dir_content[i]} to {new_file_path}')
-                        rename(sensor_dir_content[i], new_file_path)
+                    move_file(sensor_dir_content[i], new_file_path, reason='file has different date than parent directory', dry_run=dry_run)
             # Detect different file specs in same directory
             filename_spec_valid = filename_spec.copy()[(filename_spec != 0) & (filename_spec != -1)] 
             if filename_spec_valid.size > 0:
                 if not np.all(filename_spec_valid == filename_spec_valid[0]):
-                    raise ValueError(f'{sensor_dir} contains raw files generated by different OS revisions, I\'m not sure how to proceed.')
-            # Detect multiple CPU IDs in same directory
+                    unhandleable_file(f'{sensor_dir} contains raw files generated by different OS revisions, I\'m not sure how to proceed.', dry_run=dry_run)
+            # Detect multiple CPU serials in same directory
             cpu_ids_valid = cpu_ids.copy()[cpu_ids != 0]
             if cpu_ids_valid.size > 0:
-                if not np.all(cpu_ids_valid == cpu_ids_valid[0]):
-                    ids_found = ', '.join([f'0x{id:x}' for id in np.unique(cpu_ids_valid)])
-                    raise ValueError(f'{sensor_dir} contains raw files generated by CPU serial numbers: {ids_found}, I\'m not sure how to proceed.')
+                unique_cpu_ids = np.unique(cpu_ids_valid)
+                if unique_cpu_ids.size == 1:
+                    this_date_ids[str(sensor_num).zfill(2)] = unique_cpu_ids[0]
+                else:
+                    ids_found = ', '.join([f'0x{id:x}' for id in unique_cpu_ids])
+                    unhandleable_file(f'{sensor_dir} contains raw files generated by CPU serial numbers: {ids_found}, I\'m not sure how to proceed.', dry_run=dry_run)
+        # Detect same CPU serial in different sensor directories at same time
+        if len(this_date_ids.keys()) > 1:
+            unique_ids_this_day, id_counts_this_day = np.unique(list(this_date_ids.values()), return_counts=True)
+            if np.any(id_counts_this_day > 1):
+                duplicate_ids_this_day = unique_ids_this_day[id_counts_this_day > 1]
+                for dup_id in duplicate_ids_this_day:
+                    sensors_with_dup_id = [f'{date_dir}/sensor_{sensor}/' for sensor, cpu_id in this_date_ids.items() if cpu_id == dup_id]
+                    sensors_with_dup_id_str = ', '.join(sensors_with_dup_id)
+                    unhandleable_file(f'Duplicate CPU serial 0x{dup_id:x} in sensor directories: {sensors_with_dup_id_str}', dry_run=dry_run)
 
-    # TODO: find same CPU ID in different sensor directories at same time
+
     # TODO: Create a log of CPU IDs and sensor numbers to move sensor IDs to the correct locations
     # TODO: Find dates of old deployments and associate lat/lon and maybe even CPU ID to convert to new file format
-    # TODO: find files with [this issue](https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3) and try to recover the missing locations?... kinda done, renamed to NO_FIX to be handled by below
     # TODO: Do the same for files with NO_FIX
     # TODO: find 0-byte files and remove them
     # TODO: plot time differences between files to find gaps and misplaced files
