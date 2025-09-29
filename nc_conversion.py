@@ -169,8 +169,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     files = args.input
-#     print(files)
-#     print(len(files))
 
     if len(files) == 1:
         files = glob(files[0])
@@ -178,7 +176,7 @@ if __name__ == '__main__':
         files = files
     files = sorted(files)
 
-    offsets =pd.read_csv('SAoffset_20250929.csv')
+    offsets = pd.read_csv('SAoffset_20250929.csv')
 
 
     # Count of all rollovers
@@ -187,22 +185,13 @@ if __name__ == '__main__':
     adc_twofile = []
     time_twofile = []
 
-    for idx in np.arange(len(sorted(files))):  
-
-        T1 = pd.to_datetime(datetime.strptime(os.path.basename(files[idx])[:22],"%Y%m%d_%H%M%S_%f"))
-        file = os.path.basename(files[idx])
-        fn_split = file.replace('.raw', '').split('_')
-        sensor_id = str(fn_split[-2])
-        nsensorchars=len(sensor_id)
-        print(sensor_id)
-        
+    for idx, filepath in enumerate(files):  
         sensor_lat = args.latitude if args.latitude else np.nan
         sensor_lon = args.longitude if args.longitude else np.nan
         sensor_alt = args.altitude if args.altitude else np.nan
         sensor_relay = args.relay if args.relay else np.nan
-        filename = os.path.basename(files[idx])
+        filename = os.path.basename(filepath)
         fn_split = filename.replace('.raw', '').split('_')
-        sensor_relay = fn_split[-1]
         if len(fn_split) == 2:
             # This is an "old" rawfile
             T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1], "%Y%m%d%H%M%S_%f")
@@ -212,39 +201,33 @@ if __name__ == '__main__':
             sensor_relay = fn_split[2]
         elif len(fn_split) == 6: #no lat/lon/alt information, so take it from previous file assuming no location change
             T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1]+"_"+fn_split[2], "%Y%m%d_%H%M%S_%f")
-            sensor_lat = sensor_lat if fn_split[3] != 'NO' else np.nan
-            sensor_lon = sensor_lon if fn_split[4] != 'FIX' else np.nan
-            sensor_alt = sensor_alt if fn_split[5] != '2Donly' else np.nan
+            sensor_lat = sensor_lat if fn_split[3] != 'NO' else sensor_lat
+            sensor_lon = sensor_lon if fn_split[4] != 'FIX' else sensor_lon
+            sensor_alt = sensor_alt if fn_split[5] != '2Donly' else sensor_alt
             if sensor_alt == 0.0:
                 sensor_alt = np.nan
+            sensor_id = str(fn_split[-2])
+            sensor_relay = fn_split[-1]
         elif len(fn_split) == 9:
             # This is a "July 2024" rawfile
-            T1 = pd.to_datetime(datetime.strptime(os.path.basename(files[idx])[:22],"%Y%m%d_%H%M%S_%f"))
-#             T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1]+"_"+fn_split[2], "%Y%m%d_%H%M%S_%f")
-            sensor_lat = float(fn_split[3]) if fn_split[3] != 'NO' else np.nan
-            sensor_lon = float(fn_split[4]) if fn_split[4] != 'FIX' else np.nan
-            sensor_alt = float(fn_split[5]) if fn_split[5] != '2Donly' else np.nan
+            T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1]+"_"+fn_split[2], "%Y%m%d_%H%M%S_%f")
+            sensor_lat = float(fn_split[3]) if fn_split[3] != 'NO' else sensor_lat
+            sensor_lon = float(fn_split[4]) if fn_split[4] != 'FIX' else sensor_lon
+            sensor_alt = float(fn_split[5]) if fn_split[5] != '2Donly' else sensor_alt
             if sensor_alt == 0.0:
                 sensor_alt = np.nan
-        
+            sensor_id = str(fn_split[-2])
+            sensor_relay = fn_split[-1]
         else:
             raise ValueError(f'Unknown format of file: {filename}')
         # Read and decode raw data
 #         data_packets = sa_common.read_SA_file(files[idx]) 
-
         data_raw_packets=[]
         data_start_bytes = []
         data_packet_length = 8
         data_packets = []
         this_packet_length = data_packet_length + 1
-
-        # Read and decode raw data
-        data_raw_packets=[]
-        data_start_bytes = []
-        data_packet_length = 8
-        data_packets = []
-        this_packet_length = data_packet_length + 1
-        with open(files[idx], mode = 'rb') as file:
+        with open(filepath, mode = 'rb') as file:
             ba = file.read()
         for i in range(len(ba) - data_packet_length):
             if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
@@ -252,17 +235,17 @@ if __name__ == '__main__':
         data_raw_packets.extend([ba[sb:sb+this_packet_length] for sb in data_start_bytes[:-1]])
         data_packets = [sa_common.decode_data_packet(b) for b in data_raw_packets]
 
-    # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter
+        # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter
         adc_ready, new_rolls = correct_micros(np.asarray([dp['adc_pps_micros'] for dp in data_packets]),
                                SAMPLE_RATE)
-    # Add on the cumulative rollovers from previous files
+        # Add on the cumulative rollovers from previous files
         adc_ready += total_rollovers*u4max
         total_rollovers += new_rolls
 
 
-        time_orig = T1 + (adc_ready-adc_ready[0]).astype('timedelta64[us]')
+        time_orig = T1 + (adc_ready-adc_ready[0]).astype('timedelta64[us]').astype('O')
 
-    # Sensor measurements from the ADC. 24 bit sensor, so 32 bit int will be fine.
+        # Sensor measurements from the ADC. 24 bit sensor, so 32 bit int will be fine.
         adc = np.asarray([dp['adc_reading'] for dp in data_packets]).astype('int32')
         if bump == 0:
             bump = len(adc)
@@ -271,7 +254,7 @@ if __name__ == '__main__':
             time_orig_prev = time_orig
             pps_micro_prev = adc_ready
             T0 = T1
-         #There's nothing to subtract, so we don't write out the file
+            #There's nothing to subtract, so we don't write out the file
             continue
         
         else:
@@ -280,8 +263,7 @@ if __name__ == '__main__':
             time_orig_2file = np.concatenate((time_orig_prev, time_orig))
             pps_micro_2file = np.concatenate((pps_micro_prev,adc_ready))
 
- 
-        
+
         ds = xr.Dataset(pd.DataFrame(
             {'ADC':adc_2file,
              'pps_micro':pps_micro_2file,
@@ -299,32 +281,17 @@ if __name__ == '__main__':
                 sensor_relay = 2
             case _:
                 raise ValueError(f'Unknown relay: {sensor_relay}')
-                
-        match args.sensor_num:
-            case 1 :
-                SAoffset = offsets['1'][0]
-            case 2:
-                SAoffset = offsets['2'][0]
-            case 3:
-                SAoffset = offsets['3'][0]
-            case 5:
-                SAoffset = offsets['5'][0]
-            case 6:
-                SAoffset = offsets['6'][0]
-            case 7:
-                SAoffset = offsets['7'][0]
-            case 8:
-                SAoffset = offsets['8'][0]
-            case 10:
-                SAoffset = offsets['10'][0]
-            case _:
-                raise ValueError(f'Unknown relay: {args.sensor_num}')
+        
+        if str(args.sensor_num) in offsets.columns:
+            SAoffset = offsets[str(args.sensor_num)][0]
+        else:
+            raise ValueError(f'No offset found for sensor: {args.sensor_num}')
         ds = ds.assign(
             lat = ('sensor_num', np.array([sensor_lat])),
             lon = ('sensor_num', np.array([sensor_lon])),
             alt = ('sensor_num', np.array([sensor_alt])),
             relay = ('sensor_num', np.array([sensor_relay])),
-            PIid = ('sensor_num', np.array([sensor_id],dtype=f'S{nsensorchars}')),
+            PIid = ('sensor_num', np.array([sensor_id],dtype=f'S{len(sensor_id)}')),
             offset=('sensor_num',np.array([SAoffset]))
         )
         ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
