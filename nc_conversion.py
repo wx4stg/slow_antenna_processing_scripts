@@ -160,7 +160,7 @@ def add_other_time_vars(ds):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
     parser.add_argument('-i', '--input', nargs='+', required=True, help='Path or paths to slow antenna files to convert.')
-    parser.add_argument('-s', '--sensor_num', help='The ADC number of the sensor that collected the data.', type=int)
+    parser.add_argument('-s', '--sensor_num', required=True,help='The ADC number of the sensor that collected the data.', type=int)
     parser.add_argument('--latitude', type=float, help='Latitude of the sensor. Overridden if the latitude is present in the file name.')
     parser.add_argument('--longitude', type=float, help='Longitude of the sensor. Overridden if the longitude is present in the file name.')
     parser.add_argument('--altitude', type=float, help='Altitude of the sensor. Overridden if the altitude is present in the file name.')
