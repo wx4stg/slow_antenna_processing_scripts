@@ -160,7 +160,7 @@ def add_other_time_vars(ds):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
     parser.add_argument('-i', '--input', nargs='+', required=True, help='Path or paths to slow antenna files to convert.')
-    parser.add_argument('-s', '--sensor_num', required=True,help='The ADC number of the sensor that collected the data.', type=int)
+    parser.add_argument('-s', '--sensor_num', required=True,help='The ADC board number of the sensor that collected the data.', type=int)
     parser.add_argument('--latitude', type=float, help='Latitude of the sensor. Overridden if the latitude is present in the file name.')
     parser.add_argument('--longitude', type=float, help='Longitude of the sensor. Overridden if the longitude is present in the file name.')
     parser.add_argument('--altitude', type=float, help='Altitude of the sensor. Overridden if the altitude is present in the file name.')
@@ -221,23 +221,10 @@ if __name__ == '__main__':
         else:
             raise ValueError(f'Unknown format of file: {filename}')
         # Read and decode raw data
-#         data_packets = sa_common.read_SA_file(files[idx]) 
-        data_raw_packets=[]
-        data_start_bytes = []
-        data_packet_length = 8
-        data_packets = []
-        this_packet_length = data_packet_length + 1
-        with open(filepath, mode = 'rb') as file:
-            ba = file.read()
-        for i in range(len(ba) - data_packet_length):
-            if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
-                data_start_bytes.append(i)
-        data_raw_packets.extend([ba[sb:sb+this_packet_length] for sb in data_start_bytes[:-1]])
-        data_packets = [sa_common.decode_data_packet(b) for b in data_raw_packets]
-
+        data_packets = sa_common.read_SA_file(filepath)
+        adc_pps_micros, adc_reading = sa_common.decode_SA_array(data_packets)
         # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter
-        adc_ready, new_rolls = correct_micros(np.asarray([dp['adc_pps_micros'] for dp in data_packets]),
-                               SAMPLE_RATE)
+        adc_ready, new_rolls = correct_micros(adc_pps_micros, SAMPLE_RATE)
         # Add on the cumulative rollovers from previous files
         adc_ready += total_rollovers*u4max
         total_rollovers += new_rolls
@@ -246,7 +233,7 @@ if __name__ == '__main__':
         time_orig = T1 + (adc_ready-adc_ready[0]).astype('timedelta64[us]').astype('O')
 
         # Sensor measurements from the ADC. 24 bit sensor, so 32 bit int will be fine.
-        adc = np.asarray([dp['adc_reading'] for dp in data_packets]).astype('int32')
+        adc = np.asarray(adc_reading).astype('int32')
         if bump == 0:
             bump = len(adc)
 
@@ -271,7 +258,7 @@ if __name__ == '__main__':
 
         ds = interpolate_across_system_times(add_other_time_vars(ds))
         fileoutname = f'SA{args.sensor_num}_{T0.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
-        ds = ds.assign_coords({'sensor_num' : [sensor_id]})        
+        ds = ds.assign_coords({'sensor_num' : [args.sensor_num]})        
         match sensor_relay:
             case 'a':
                 sensor_relay = 0
@@ -294,6 +281,7 @@ if __name__ == '__main__':
             raspi_cpu_serial = ('sensor_num', np.array([sensor_id],dtype=f'S{len(sensor_id)}')),
             offset=('sensor_num',np.array([SAoffset]))
         )
+        ds['sensor_num'].attrs['long_name'] = 'ADC board number'
         ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
         ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
         ds['pps_micro'].attrs['units'] = 'microseconds'
@@ -315,7 +303,7 @@ if __name__ == '__main__':
         
         
         bump = len(adc)
-# #write out the first file, then update bump, then update _prev filenames. 
+        # write out the first file, then update bump, then update _prev filenames. 
 
         adc_prev = adc
         time_orig_prev = time_orig
