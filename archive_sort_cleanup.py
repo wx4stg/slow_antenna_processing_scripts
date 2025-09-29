@@ -168,9 +168,9 @@ if __name__ == '__main__':
                             lats_to_avg.append(all_lats[i+1])
                             alts_to_avg.append(all_alts[i+1])
                         if len(lons_to_avg) > 0 and len(lats_to_avg) > 0 and len(alts_to_avg) > 0 and ~np.all(np.isnan(lons_to_avg)) and ~np.all(np.isnan(lats_to_avg)) and ~np.all(np.isnan(alts_to_avg)):
-                            this_file_lon = np.nanmean(lons_to_avg)
-                            this_file_lat = np.nanmean(lats_to_avg)
-                            this_file_alt = np.nanmean(alts_to_avg)
+                            this_file_lon = np.mean(lons_to_avg)
+                            this_file_lat = np.mean(lats_to_avg)
+                            this_file_alt = np.mean(alts_to_avg)
                             if np.all([~np.isnan(this_file_lon), ~np.isnan(this_file_lat), ~np.isnan(this_file_alt)]):
                                 new_file_name = f'{this_file_dt.strftime("%Y%m%d_%H%M%S_%f")}_{this_file_lat:.3f}_{this_file_lon:.3f}_{this_file_alt:.1f}_{this_file_gps_err:.2f}_{cpu_ids[i]:x}_{this_file_relay}.raw'
                                 new_file_path = sensor_dir_content[i].replace(psbl_rawfile, new_file_name)
