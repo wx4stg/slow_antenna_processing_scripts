@@ -291,7 +291,7 @@ if __name__ == '__main__':
             lon = ('sensor_num', np.array([sensor_lon])),
             alt = ('sensor_num', np.array([sensor_alt])),
             relay = ('sensor_num', np.array([sensor_relay])),
-            PIid = ('sensor_num', np.array([sensor_id],dtype=f'S{len(sensor_id)}')),
+            raspi_cpu_serial = ('sensor_num', np.array([sensor_id],dtype=f'S{len(sensor_id)}')),
             offset=('sensor_num',np.array([SAoffset]))
         )
         ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
@@ -307,7 +307,7 @@ if __name__ == '__main__':
         ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
         ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
         ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
-        ds['PIid'].attrs['long_name'] = 'Raspberry pi id number'
+        ds['raspi_cpu_serial'].attrs['long_name'] = 'Raspberry pi id number'
         ds['offset'].attrs['long_name'] = 'sensor bias correction offset'
         comp_ds = compress_all(ds.isel(sample=slice(0, bump)))
         print(os.path.join(args.output, fileoutname))
