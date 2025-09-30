@@ -221,7 +221,11 @@ if __name__ == '__main__':
         else:
             raise ValueError(f'Unknown format of file: {filename}')
         # Read and decode raw data
-        data_packets = sa_common.read_SA_file(filepath)
+        if idx == 0:
+            last_file = None
+        else:
+            last_file = files[idx-1]
+        data_packets = sa_common.read_SA_file(filepath, previous_file=last_file)
         adc_pps_micros, adc_reading = sa_common.decode_SA_array(data_packets)
         # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter
         adc_ready, new_rolls = correct_micros(adc_pps_micros, SAMPLE_RATE)
