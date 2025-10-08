@@ -233,17 +233,22 @@ if __name__ == '__main__':
                     sensors_with_dup_id = [f'{date_dir}/sensor_{sensor}/' for sensor, cpu_id in this_date_ids.items() if cpu_id == dup_id]
                     sensors_with_dup_id_str = ', '.join(sensors_with_dup_id)
                     unhandleable_file(f'Same CPU serial 0x{dup_id:x} in sensor directories: {sensors_with_dup_id_str}', dry_run=dry_run)
-        dts_this_day = np.array(dts_this_day)
-        lons_this_day = np.array(lons_this_day)
-        lats_this_day = np.array(lats_this_day)
-        paths_this_day = np.array(paths_this_day)
+        prunable_dts_this_day = np.array(dts_this_day)
+        prunable_lons_this_day = np.array(lons_this_day)
+        prunable_lats_this_day = np.array(lats_this_day)
+        prunable_paths_this_day = np.array(paths_this_day)
+        prunable_mask = ~(np.isnan(prunable_lons_this_day) | np.isnan(prunable_lats_this_day))
+        prunable_dts_this_day = prunable_dts_this_day[prunable_mask]
+        prunable_lons_this_day = prunable_lons_this_day[prunable_mask]
+        prunable_lats_this_day = prunable_lats_this_day[prunable_mask]
+        prunable_paths_this_day = prunable_paths_this_day[prunable_mask]
         # Prune uninteresting data by LMA
-        if args.lma_data is not None and len(paths_this_day) > 0 and np.all(~np.isnan(lons_this_day) & ~np.isnan(lats_this_day)):
-            first_time_today = np.min(dts_this_day)
+        if args.lma_data is not None and len(prunable_paths_this_day) > 0 and np.all(~np.isnan(prunable_lons_this_day) & ~np.isnan(prunable_lats_this_day)):
+            first_time_today = np.min(prunable_dts_this_day)
             first_time_today = first_time_today.replace(minute=(first_time_today.minute // 10) * 10, second=0, microsecond=0)
-            last_time_today = np.max(dts_this_day)
+            last_time_today = np.max(prunable_dts_this_day)
             last_time_today = last_time_today.replace(minute=(last_time_today.minute // 10) * 10, second=0, microsecond=0) + timedelta(minutes=10)
-            dts_this_day = dts_this_day.astype('datetime64[s]')
+            prunable_dts_this_day = prunable_dts_this_day.astype('datetime64[s]')
             # Find LMA files that cover this time range
             lma_pattern = path.join(args.lma_data, this_date.strftime('%Y/%b/%d/*_%y%m%d_*_0600.dat.flash.h5'))
             lma_file_paths = sorted(glob(lma_pattern))
@@ -265,16 +270,17 @@ if __name__ == '__main__':
                 this_flash_df['flash_dt'] = pd.Timestamp(lma_file_times[i].replace(hour=0, minute=0, second=0, microsecond=0)) + pd.to_timedelta(this_flash_df['start'], unit='s')
                 flash_df = pd.concat([flash_df, this_flash_df], ignore_index=True).reset_index(drop=True)
                 ds.close()
-            sensor_X, sensor_Y, sensor_Z = geosys.toECEF(lons_this_day, lats_this_day, np.zeros(lons_this_day.shape))
+            flash_df = flash_df[flash_df['n_points'] >= 20] # only consider flashes with 20 or more points
+            sensor_X, sensor_Y, sensor_Z = geosys.toECEF(prunable_lons_this_day, prunable_lats_this_day, np.zeros(prunable_lons_this_day.shape))
             flash_X, flash_Y, flash_Z = geosys.toECEF(flash_df['ctr_lon'].values, flash_df['ctr_lat'].values, np.zeros(flash_df['ctr_lon'].shape))
             distances = ((sensor_X.reshape((-1, 1)) - flash_X.reshape((1, -1)))**2
                        + (sensor_Y.reshape((-1, 1)) - flash_Y.reshape((1, -1)))**2
                        + (sensor_Z.reshape((-1, 1)) - flash_Z.reshape((1, -1)))**2)**0.5
             distances_thresholded = distances <= 100e3 # 100 km
-            times_differences = np.abs((dts_this_day.reshape((-1, 1)) - flash_df['flash_dt'].values.reshape((1, -1))).astype('timedelta64[s]').astype(float))
+            times_differences = np.abs((prunable_dts_this_day.reshape((-1, 1)) - flash_df['flash_dt'].values.reshape((1, -1))).astype('timedelta64[s]').astype(float))
             times_differences_thresholded = times_differences <= 1800 # 30 minutes
             flashes_nearby = np.any(distances_thresholded & times_differences_thresholded, axis=1)
-            paths_to_rm = paths_this_day[~flashes_nearby]
+            paths_to_rm = prunable_paths_this_day[~flashes_nearby]
             for pr in paths_to_rm:
                 delete_file(pr, reason='no nearby LMA flashes within 100 km and 30 minutes', dry_run=dry_run)
         new_date_dir_content = sorted(glob(path.join(date_dir, '*')))
