@@ -254,35 +254,34 @@ if __name__ == '__main__':
             lma_file_paths = sorted(glob(lma_pattern))
             tomorrow = this_date + timedelta(days=1)
             lma_file_paths += sorted(glob(path.join(args.lma_data, tomorrow.strftime('%Y/%b/%d/*_%y%m%d_000000_0600.dat.flash.h5'))))
-            try:
-                lma_file_times = np.array([dt.strptime(''.join(path.basename(lf).replace('_2011_', '_').split('_')[1:3]), '%y%m%d%H%M%S') for lf in lma_file_paths])
-            except Exception as e:
-                print(f'Error interpreting LMA file times from pattern {lma_pattern}: {e}')
-                print(lma_pattern)
-                raise e
+            lma_file_times = np.array([dt.strptime(''.join(path.basename(lf).replace('_2011_', '_').split('_')[1:3]), '%y%m%d%H%M%S') for lf in lma_file_paths])
             files_to_read_mask = (lma_file_times >= first_time_today) & (lma_file_times <= last_time_today)
             lma_file_times = lma_file_times[files_to_read_mask]
             lma_file_paths = np.array(lma_file_paths)[files_to_read_mask].tolist()
-            flash_df = pd.DataFrame()
-            for i, this_path in enumerate(lma_file_paths):
-                ds = h5py.File(this_path, 'r')
-                this_flash_df = pd.DataFrame(ds['flashes'][lma_file_times[i].strftime('LMA_%y%m%d_%H%M%S_600')][:])
-                this_flash_df['flash_dt'] = pd.Timestamp(lma_file_times[i].replace(hour=0, minute=0, second=0, microsecond=0)) + pd.to_timedelta(this_flash_df['start'], unit='s')
-                flash_df = pd.concat([flash_df, this_flash_df], ignore_index=True).reset_index(drop=True)
-                ds.close()
-            flash_df = flash_df[flash_df['n_points'] >= 20] # only consider flashes with 20 or more points
-            sensor_X, sensor_Y, sensor_Z = geosys.toECEF(prunable_lons_this_day, prunable_lats_this_day, np.zeros(prunable_lons_this_day.shape))
-            flash_X, flash_Y, flash_Z = geosys.toECEF(flash_df['ctr_lon'].values, flash_df['ctr_lat'].values, np.zeros(flash_df['ctr_lon'].shape))
-            distances = ((sensor_X.reshape((-1, 1)) - flash_X.reshape((1, -1)))**2
-                       + (sensor_Y.reshape((-1, 1)) - flash_Y.reshape((1, -1)))**2
-                       + (sensor_Z.reshape((-1, 1)) - flash_Z.reshape((1, -1)))**2)**0.5
-            distances_thresholded = distances <= 100e3 # 100 km
-            times_differences = np.abs((prunable_dts_this_day.reshape((-1, 1)) - flash_df['flash_dt'].values.reshape((1, -1))).astype('timedelta64[s]').astype(float))
-            times_differences_thresholded = times_differences <= 1800 # 30 minutes
-            flashes_nearby = np.any(distances_thresholded & times_differences_thresholded, axis=1)
-            paths_to_rm = prunable_paths_this_day[~flashes_nearby]
-            for pr in paths_to_rm:
-                delete_file(pr, reason='no nearby LMA flashes within 100 km and 30 minutes', dry_run=dry_run)
+            if len(lma_file_paths) > 0:
+                flash_df = pd.DataFrame()
+                for i, this_path in enumerate(lma_file_paths):
+                    ds = h5py.File(this_path, 'r')
+                    this_flash_df = pd.DataFrame(ds['flashes'][lma_file_times[i].strftime('LMA_%y%m%d_%H%M%S_600')][:])
+                    this_flash_df['flash_dt'] = pd.Timestamp(lma_file_times[i].replace(hour=0, minute=0, second=0, microsecond=0)) + pd.to_timedelta(this_flash_df['start'], unit='s')
+                    flash_df = pd.concat([flash_df, this_flash_df], ignore_index=True).reset_index(drop=True)
+                    ds.close()
+                if flash_df.shape[0] > 0:
+                    flash_df = flash_df[flash_df['n_points'] >= 20] # only consider flashes with 20 or more points
+                    sensor_X, sensor_Y, sensor_Z = geosys.toECEF(prunable_lons_this_day, prunable_lats_this_day, np.zeros(prunable_lons_this_day.shape))
+                    flash_X, flash_Y, flash_Z = geosys.toECEF(flash_df['ctr_lon'].values, flash_df['ctr_lat'].values, np.zeros(flash_df['ctr_lon'].shape))
+                    distances = ((sensor_X.reshape((-1, 1)) - flash_X.reshape((1, -1)))**2
+                            + (sensor_Y.reshape((-1, 1)) - flash_Y.reshape((1, -1)))**2
+                            + (sensor_Z.reshape((-1, 1)) - flash_Z.reshape((1, -1)))**2)**0.5
+                    distances_thresholded = distances <= 100e3 # 100 km
+                    times_differences = np.abs((prunable_dts_this_day.reshape((-1, 1)) - flash_df['flash_dt'].values.reshape((1, -1))).astype('timedelta64[s]').astype(float))
+                    times_differences_thresholded = times_differences <= 1800 # 30 minutes
+                    flashes_nearby = np.any(distances_thresholded & times_differences_thresholded, axis=1)
+                    paths_to_rm = prunable_paths_this_day[~flashes_nearby]
+                else:
+                    paths_to_rm = prunable_paths_this_day
+                for pr in paths_to_rm:
+                    delete_file(pr, reason='no nearby LMA flashes within 100 km and 30 minutes', dry_run=dry_run)
         new_date_dir_content = sorted(glob(path.join(date_dir, '*')))
         for sensor_dir in sensor_dirs:
             new_sensor_dir_content = sorted(glob(path.join(sensor_dir, '*')))
