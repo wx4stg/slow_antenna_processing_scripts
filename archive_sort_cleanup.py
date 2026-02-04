@@ -4,6 +4,7 @@
 
 import argparse
 from os import path
+from pathlib import Path
 from glob import glob
 from datetime import datetime as dt, timedelta
 import numpy as np
@@ -40,6 +41,7 @@ def move_file(old_path, new_path, reason=None, dry_run=True):
         print(f'Would move {old_path} to {new_path}{reason_str}')
     else:
         print(f'Moving {old_path} to {new_path}{reason_str}')
+        Path(path.dirname(new_path)).mkdir(parents=True, exist_ok=True)
         rename(old_path, new_path)
 
 def unhandleable_file(message, dry_run=True):
