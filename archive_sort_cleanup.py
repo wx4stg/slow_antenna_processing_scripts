@@ -105,6 +105,7 @@ if __name__ == '__main__':
             all_lats = np.full(len(sensor_dir_content), np.nan, dtype=float)
             all_alts = np.full(len(sensor_dir_content), np.nan, dtype=float)
             for i, psbl_rawfile in enumerate(sensor_dir_content_names):
+                new_file_path = None
                 fs = path.getsize(sensor_dir_content[i])
                 if fs == 0:
                     delete_file(sensor_dir_content[i], reason='0-byte file', dry_run=dry_run)
@@ -192,7 +193,10 @@ if __name__ == '__main__':
                 dts_this_day.append(this_file_dt)
                 lons_this_day.append(all_lons[i])
                 lats_this_day.append(all_lats[i])
-                paths_this_day.append(sensor_dir_content[i])
+                if new_file_path is not None:
+                    paths_this_day.append(new_file_path)
+                else:
+                    paths_this_day.append(sensor_dir_content[i])
             # Detect different file specs in same directory
             filename_spec_valid = filename_spec.copy()[(filename_spec != 0) & (filename_spec != -1)] 
             if filename_spec_valid.size > 0:
