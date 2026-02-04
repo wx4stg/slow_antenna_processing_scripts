@@ -28,7 +28,7 @@ def delete_file(file_path, reason=None, dry_run=True):
     else:
         print(f'Removing {file_path}{reason_str}')
         if path.isdir(file_path):
-            rmdir(file_path)
+            rmtree(file_path)
         else:
             remove(file_path)
 
@@ -58,7 +58,8 @@ if __name__ == '__main__':
 
     if not dry_run:
         print('----> FILESYSTEM CHANGES CAN BE PERFORMED <----')
-        from os import remove, rmdir, rename
+        from os import remove, rename
+        from shutil import rmtree
         from time import sleep
         print('----> Press CTRL + C in the next 5 seconds to abort! <----')
         sleep(5)
