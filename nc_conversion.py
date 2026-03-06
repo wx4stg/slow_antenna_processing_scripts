@@ -303,7 +303,7 @@ if __name__ == '__main__':
         ds['offset'].attrs['long_name'] = 'sensor bias correction offset'
         comp_ds = compress_all(ds.isel(sample=slice(0, bump)))
         print(os.path.join(args.output, fileoutname))
-        comp_ds.to_netcdf(os.path.join(args.output, fileoutname))
+        comp_ds.to_netcdf(os.path.join(args.output, fileoutname), engine='netcdf4')
         
         
         bump = len(adc)
