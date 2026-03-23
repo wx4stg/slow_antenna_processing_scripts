@@ -225,6 +225,9 @@ if __name__ == '__main__':
             last_file = None
         else:
             last_file = files[idx-1]
+        if os.path.getsize(filepath) == 0:
+            print(f"File {filepath} is empty, skipping.")
+            continue
         data_packets = sa_common.read_SA_file(filepath, previous_file=last_file)
         adc_pps_micros, adc_reading = sa_common.decode_SA_array(data_packets)
         # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter

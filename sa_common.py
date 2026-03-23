@@ -7,6 +7,7 @@ def read_SA_file(file_to_read, packet_length=9, previous_file=None):
     with open(file_to_read, 'rb') as f:
         ba = f.read()
     this_bytes = np.frombuffer(ba, dtype=np.uint8)
+    j = 0
     for j, byte in enumerate(this_bytes):
         # Find the first byte that is the header of the an ADC packet
         # The ADC packet has a header of 'BE' and a footer of 'EF' (190 = BE, 239 = EF)
