@@ -2,6 +2,62 @@
 
 import struct
 import numpy as np
+from datetime import datetime as dt
+
+def parse_filename(filename):
+    out_dict = {
+        'filename_spec': np.nan,
+        'dt': np.nan,
+        'relay': np.nan,
+        'lon': np.nan,
+        'lat': np.nan,
+        'alt': np.nan,
+        'gps_err': 0,
+        'cpu_id': np.nan
+    }
+    rawfile_split = filename.replace('.raw', '').split('_')
+    match len(rawfile_split):
+        case 2:
+            # this is an 'old old' file type
+            out_dict['filename_spec'] = 1
+            out_dict['dt'] = dt.strptime(filename, '%Y%m%d%H%M%S_%f.raw')
+            # out_dict['relay'] = None # TODO: figure this out from the SA_log.out or cronlog.txt or cronlog.out or data_collect.py, if available
+            # TODO: maybe read this info from some sort of user-provided csv and convert to a "2" or "3" spec filename automatically
+            # out_dict['lon'] = np.nan
+            # out_dict['lat'] = np.nan
+            # out_dict['alt'] = np.nan
+            # out_dict['gps_err'] = 0 # if there is no GPS data, the error is defined to be 0
+            # out_dict['cpu_id'] = np.nan
+        case 3:
+            # this is an 'old' file type
+            out_dict['filename_spec'] = 2
+            out_dict['dt'] = dt.strptime(rawfile_split[0]+rawfile_split[1], '%Y%m%d%H%M%S%f')
+            out_dict['relay'] = rawfile_split[2]
+            # out_dict['gps_err'] = 0
+            # out_dict['cpu_id'] = np.nan
+        case 9:
+            # this is a current filename
+            out_dict['filename_spec'] = 3
+            out_dict['dt'] = dt.strptime(rawfile_split[0]+rawfile_split[1]+rawfile_split[2], '%Y%m%d%H%M%S%f')
+            out_dict['lat'] = np.nan if rawfile_split[3] == 'NO' else float(rawfile_split[3])
+            out_dict['lon'] = np.nan if rawfile_split[4] == 'FIX' else float(rawfile_split[4])
+            out_dict['alt'] = np.nan if rawfile_split[5] == '2Donly' else float(rawfile_split[5])
+            out_dict['gps_err'] = float(rawfile_split[6]) if ~np.isnan(out_dict['lon']) else 0
+            out_dict['cpu_id'] = int(rawfile_split[7], 16)
+            out_dict['relay'] = rawfile_split[8]
+        # case 6:
+        #     # This is a current file with no GPS... see https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3
+        #     out_dict['filename_spec'] = 3
+        #     out_dict['dt'] = dt.strptime(rawfile_split[0]+rawfile_split[1]+rawfile_split[2], '%Y%m%d%H%M%S%f')
+        #     out_dict['lat'] = np.nan
+        #     out_dict['lon'] = np.nan
+        #     out_dict['alt'] = np.nan
+        #     out_dict['gps_err'] = float(rawfile_split[3]) if ~np.isnan(out_dict['lon']) else 0
+        #     out_dict['cpu_id'] = int(rawfile_split[4], 16)
+        #     out_dict['relay'] = rawfile_split[5]
+        case _:
+            raise ValueError(f'Filename {filename} does not match any known filename specifications.')
+    return out_dict
 
 def read_SA_file(file_to_read, packet_length=9, previous_file=None):
     with open(file_to_read, 'rb') as f:
