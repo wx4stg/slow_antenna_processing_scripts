@@ -7,7 +7,8 @@ from os import path
 from pathlib import Path
 from glob import glob
 from sa_common import parse_filename
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, UTC
+from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import h5py
@@ -21,7 +22,6 @@ parser.add_argument('--trigger', '-t', action='store_true', default=False, help=
 parser.add_argument('--dry-run', '-n', action='store_true', help='Log actions without making any changes.')
 parser.add_argument('--cpu-serial-log', '-c', type=str, default=None, help='Path to a CSV file logging CPU serial numbers and their associated sensor numbers and deployment dates. Leave unspecified to skip.')
 parser.add_argument('--history-file', type=str, help='Path to a CSV file logging the history of previous deployments that collected \'old old\' or \'old\' data. Files with data collection dates that fall within the date ranges of these deployments will be renamed to the current filename specification and sorted into the archive according to their collection date and sensor number.')
-parser.add_argument('--hardware-file', type=str, help='Path to a CSV file logging the hardware information for each sensor.')
 parser.add_argument('--debug-dataframe', '-d', type=str, default=None, help='Path to write the dataframe containing all parsed filename information and pruning decisions to a CSV for debugging purposes. Leave unspecified to skip.')
 
 
@@ -114,10 +114,14 @@ def upgrade_old_filenames(filenames_parsed, history_df):
         if len(history_row) != 1:
             unhandleable_file(f'File {old_raw_path} has datetime {this_dt} and sensor number {parsed["sensor_num"]} that falls within {len(history_row)} rows of the history file. Cannot determine how to rename and sort this file without a unique matching row in the history file.', dry_run=args.dry_run)
             continue
+        if history_row['needs_utc_correction'].values[0]:
+            this_dt_aware = this_dt.replace(tzinfo=ZoneInfo('America/Chicago'))
+            this_dt_utc = this_dt_aware.astimezone(UTC)
+            this_dt = this_dt_utc.replace(tzinfo=None)
         this_lat = history_row['lat'].values[0]
         this_lon = history_row['lon'].values[0]
         this_alt = history_row['alt'].values[0]
-        this_gps_err = history_row['gps_err'].values[0]
+        this_gps_err = 0
         this_cpu_id = history_row['cpu_id'].values[0]
         this_relay = parsed['relay']
         if parsed['filename_spec'] == 2 or ~np.isnan(this_relay):
@@ -156,7 +160,7 @@ def create_cpu_serial_log(filenames_parsed):
     error_msgs = []
     unique_hex_serials = np.unique([hex(int(this_parsed)) for this_parsed in filenames_parsed['cpu_id'].values if ~np.isnan(this_parsed)])
     all_dates = np.unique(filenames_parsed['dt'].dt.normalize())
-    cpu_serial_df = pd.DataFrame(index=pd.Index(unique_hex_serials, name='CPU Serial'), columns=np.sort(np.unique(all_dates)), dtype='float')
+    cpu_serial_df = pd.DataFrame(index=pd.Index(unique_hex_serials, name='CPU Serial'), columns=[d.strftime('%Y%m%d') for d in np.sort(np.unique(all_dates)).astype('datetime64[D]').astype('O')], dtype='float')
     for i, (sensor_num, cpu_serial, date) in enumerate(zip(filenames_parsed['sensor_num'], filenames_parsed['cpu_id'], filenames_parsed['dt'].dt.strftime('%Y%m%d'))):
         if np.isnan(cpu_serial):
             continue
@@ -248,7 +252,7 @@ if __name__ == '__main__':
     if args.history_file is not None:
         history_df = pd.read_csv(args.history_file, parse_dates=['start_date', 'end_date'])
     else:
-        history_df = pd.DataFrame(columns=['sensor_num', 'start_date', 'end_date', 'lat', 'lon', 'alt', 'gps_err', 'cpu_id', 'relay'])
+        history_df = pd.DataFrame(columns=['sensor_num', 'start_date', 'end_date', 'lat', 'lon', 'alt', 'cpu_id', 'relay', 'needs_utc_correction'])
     # Get full paths to all raw files
     raw_files = glob(path.join(args.unsorted_files, '**', '*.raw'), recursive=True)
     raw_paths = [Path(f) for f in raw_files]
