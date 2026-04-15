@@ -28,8 +28,9 @@ parser.add_argument('--debug-dataframe', '-d', type=str, default=None, help='Pat
 args = parser.parse_args()
 if not args.dry_run:
     print('----> FILESYSTEM CHANGES CAN BE PERFORMED <----')
-    from shutil import copy2
+    from shutil import copyfile
     from time import sleep
+    from zlib import crc32
     print('----> Press CTRL + C in the next 5 seconds to abort! <----')
     sleep(5)
 
@@ -45,7 +46,16 @@ def copy_file(old_path, new_path, reason=None, dry_run=True):
     else:
         print(f'Copying {old_path} to {new_path}{reason_str}')
         Path(path.dirname(new_path)).mkdir(parents=True, exist_ok=True)
-        copy2(old_path, new_path)
+        if path.exists(new_path):
+            with open(old_path, 'rb') as f:
+                old_crc = crc32(f.read())
+            with open(new_path, 'rb') as f:
+                new_crc = crc32(f.read())
+            if old_crc == new_crc:
+                return
+            else:
+                unhandleable_file(f'File {new_path} already exists and has different contents than {old_path}. Cannot copy {old_path} to {new_path} without overwriting a different file. Please resolve this conflict manually.', dry_run=dry_run)
+        copyfile(old_path, new_path)
 
 def unhandleable_file(message, dry_run=True):
     if dry_run:
@@ -138,7 +148,6 @@ def upgrade_old_filenames(filenames_parsed, history_df):
     return filenames_parsed
 
 
-
 def fix_issue_three(filenames_parsed):
     issue_3_files = filenames_parsed.loc[(filenames_parsed['filename_spec'] == 3) & (filenames_parsed['gps_err'] == 0) & (filenames_parsed['lat'].isna()) & (filenames_parsed['lon'].isna()) & (filenames_parsed['alt'].isna())]
     for i, row in issue_3_files.iterrows():
@@ -155,6 +164,7 @@ def fix_issue_three(filenames_parsed):
         filenames_parsed.at[i, 'lat'] = nearby_lats
         filenames_parsed.at[i, 'alt'] = nearby_alts
     return filenames_parsed
+
 
 def create_cpu_serial_log(filenames_parsed):
     error_msgs = []
@@ -175,6 +185,7 @@ def create_cpu_serial_log(filenames_parsed):
     cpu_serial_df = cpu_serial_df.astype(int)
     cpu_serial_df.to_csv(args.cpu_serial_log, index=True)
 
+
 def sort_files(filenames_parsed, archive_root):
     files_to_move = filenames_parsed.loc[filenames_parsed['keep']]
     for i, parsed in files_to_move.iterrows():
@@ -191,6 +202,7 @@ def sort_files(filenames_parsed, archive_root):
         new_path = path.join(archive_root, f'{parsed["dt"].strftime("%Y%m%d")}', f'sensor_{str(int(parsed["sensor_num"])).zfill(2)}', 
                                 f'{parsed["dt"].strftime("%Y%m%d_%H%M%S_%f")}_{this_lat}_{this_lon}_{this_alt}_{this_gps_err}_{this_cpu_id}_{this_relay}.raw')
         copy_file(old_raw_path, new_path, dry_run=args.dry_run)
+
 
 def filter_lma(filenames_parsed, lma_data_path):
     geosys = coords.GeographicSystem()
@@ -235,10 +247,12 @@ def filter_lma(filenames_parsed, lma_data_path):
                 filenames_parsed.loc[filenames_parsed['dt'].dt.normalize() == this_date, 'filtered_by_lma'] = True
     return filenames_parsed
 
+
 def filter_triggers(filenames_parsed):
     print('TODO: PUT TRIGGERS HERE!')
     filenames_parsed['filtered_by_trigger'] = False
     return filenames_parsed
+
 
 def filter_empty(filenames_parsed):
     filenames_parsed['filtered_by_empty'] = False
@@ -246,6 +260,7 @@ def filter_empty(filenames_parsed):
         if path.getsize(row['raw_path']) == 0:
             filenames_parsed.at[i, 'filtered_by_empty'] = True
     return filenames_parsed
+
 
 if __name__ == '__main__':
     # Read history, if provided
