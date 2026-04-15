@@ -122,7 +122,7 @@ def upgrade_old_filenames(filenames_parsed, history_df):
         this_lon = history_row['lon'].values[0]
         this_alt = history_row['alt'].values[0]
         this_gps_err = 0
-        this_cpu_id = history_row['cpu_id'].values[0]
+        this_cpu_id = int(history_row['cpu_id'].values[0], 16)
         this_relay = parsed['relay']
         if parsed['filename_spec'] == 2 or ~np.isnan(this_relay):
             pass
@@ -136,7 +136,7 @@ def upgrade_old_filenames(filenames_parsed, history_df):
         old_data_df.at[i, 'relay'] = this_relay
     filenames_parsed.update(old_data_df)
     return filenames_parsed
-        
+
 
 
 def fix_issue_three(filenames_parsed):
