@@ -10,8 +10,7 @@ import sa_common
 import argparse
 
 
-SAMPLE_RATE = 9600  # Hertz
-u4max = 4294967295
+u4max = np.iinfo(np.uint32).max
 
 
 def compress_all(nc_grids, min_dims=1):
@@ -56,8 +55,6 @@ def correct_micros(micros, fs, tol=0.1, window=7):
     If found, simply extrapolate using the floor of the mean sample rate.
     
     """
-    micros_orig = micros
-    
     nominal_dt_micro = int(1e6/fs)
     
     def get_bad(m):
@@ -123,7 +120,8 @@ def correct_micros(micros, fs, tol=0.1, window=7):
     else:
         return micros, n_rollovers
 
-def interpolate_across_system_times(ds, SAMPLE_RATE=10000):
+
+def interpolate_across_system_times(ds, SAMPLE_RATE=9600):
     
     nominal_dt = 1.0/SAMPLE_RATE
     good_sample_thresh = (3*nominal_dt)
@@ -144,18 +142,19 @@ def interpolate_across_system_times(ds, SAMPLE_RATE=10000):
     jump = jump[jump_idx]
     
     all_samples = np.arange(adc_minus_system.shape[0])
-    offset_curve = np.interp(all_samples, 
+    offset_curve = np.interp(all_samples,
                              jump_idx,
                              adc_minus_system[jump_idx])
     correction = offset_curve - adc_minus_system
     ds['time'] = ds.time_uncorrected - (correction*1e9).astype('timedelta64[ns]')
     return ds
-    
-    
+
+
 def add_other_time_vars(ds):
     ds['dt_system'] = (ds.time_uncorrected-ds.time_uncorrected[0]).astype('datetime64[ns]').astype('f8')/1e9
     ds['dt_adc'] = (ds.pps_micro - ds.pps_micro[0]).astype('f8')/1e6
     return ds
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
@@ -166,60 +165,38 @@ if __name__ == '__main__':
     parser.add_argument('--altitude', type=float, help='Altitude of the sensor. Overridden if the altitude is present in the file name.')
     parser.add_argument('-r', '--relay', help='Relay used (a/b/c). Overridden if the relay is present in the file name.', type=str)
     parser.add_argument('-o', '--output', required=True, help='Directory to save netCDF output files.')
+    parser.add_argument('--sample-rate', type=int, default=9600, help='Sample rate of the ADC in samples/second. Default is 9600.')
     args = parser.parse_args()
 
+    SAMPLE_RATE = args.sample_rate
     files = args.input
-
+    # sort input files by filename (should be in time order)
     if len(files) == 1:
         files = glob(files[0])
     else:
         files = files
     files = sorted(files)
 
-    offsets = pd.read_csv('SAoffset_20250929.csv')
-
-
     # Count of all rollovers
     total_rollovers = 0
     bump = 0
-    adc_twofile = []
-    time_twofile = []
 
-    for idx, filepath in enumerate(files):  
+    for idx, filepath in enumerate(files):
         sensor_lat = args.latitude if args.latitude else np.nan
         sensor_lon = args.longitude if args.longitude else np.nan
         sensor_alt = args.altitude if args.altitude else np.nan
         sensor_relay = args.relay if args.relay else np.nan
         filename = os.path.basename(filepath)
-        fn_split = filename.replace('.raw', '').split('_')
-        if len(fn_split) == 2:
-            # This is an "old" rawfile
-            T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1], "%Y%m%d%H%M%S_%f")
-        elif len(fn_split) == 3:
-            # This is a "March 2024" rawfile
-            T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1], "%Y%m%d%H%M%S_%f")
-            sensor_relay = fn_split[2]
-        elif len(fn_split) == 6: #no lat/lon/alt information, so take it from previous file assuming no location change
-            T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1]+"_"+fn_split[2], "%Y%m%d_%H%M%S_%f")
-            sensor_lat = sensor_lat if fn_split[3] != 'NO' else sensor_lat
-            sensor_lon = sensor_lon if fn_split[4] != 'FIX' else sensor_lon
-            sensor_alt = sensor_alt if fn_split[5] != '2Donly' else sensor_alt
-            if sensor_alt == 0.0:
-                sensor_alt = np.nan
-            sensor_id = str(fn_split[-2])
-            sensor_relay = fn_split[-1]
-        elif len(fn_split) == 9:
-            # This is a "July 2024" rawfile
-            T1 = datetime.strptime(fn_split[0]+"_"+fn_split[1]+"_"+fn_split[2], "%Y%m%d_%H%M%S_%f")
-            sensor_lat = float(fn_split[3]) if fn_split[3] != 'NO' else sensor_lat
-            sensor_lon = float(fn_split[4]) if fn_split[4] != 'FIX' else sensor_lon
-            sensor_alt = float(fn_split[5]) if fn_split[5] != '2Donly' else sensor_alt
-            if sensor_alt == 0.0:
-                sensor_alt = np.nan
-            sensor_id = str(fn_split[-2])
-            sensor_relay = fn_split[-1]
-        else:
-            raise ValueError(f'Unknown format of file: {filename}')
+        file_metadata = sa_common.parse_filename(filename)
+        T1 = file_metadata['dt']
+        if 'lat' in file_metadata:
+            sensor_lat = file_metadata['lat']
+        if 'lon' in file_metadata:
+            sensor_lon = file_metadata['lon']
+        if 'alt' in file_metadata:
+            sensor_alt = file_metadata['alt']
+        if 'relay' in file_metadata:
+            sensor_relay = file_metadata['relay']
         # Read and decode raw data
         if idx == 0:
             last_file = None
@@ -243,7 +220,6 @@ if __name__ == '__main__':
         adc = np.asarray(adc_reading).astype('int32')
         if bump == 0:
             bump = len(adc)
-
             adc_prev = adc
             time_orig_prev = time_orig
             pps_micro_prev = adc_ready
@@ -276,17 +252,13 @@ if __name__ == '__main__':
             case _:
                 raise ValueError(f'Unknown relay: {sensor_relay}')
         
-        if str(args.sensor_num) in offsets.columns:
-            SAoffset = offsets[str(args.sensor_num)][0]
-        else:
-            raise ValueError(f'No offset found for sensor: {args.sensor_num}')
+        cpu_serial = hex(file_metadata['cpu_id'])
         ds = ds.assign(
             lat = ('sensor_num', np.array([sensor_lat])),
             lon = ('sensor_num', np.array([sensor_lon])),
             alt = ('sensor_num', np.array([sensor_alt])),
-            relay = ('sensor_num', np.array([sensor_relay])),
-            raspi_cpu_serial = ('sensor_num', np.array([sensor_id],dtype=f'S{len(sensor_id)}')),
-            offset=('sensor_num',np.array([SAoffset]))
+            raspi_cpu_serial = ('sensor_num', np.array([cpu_serial],dtype=f'S{len(cpu_serial)}')),
+            relay = ('sensor_num', np.array([sensor_relay]))
         )
         ds['sensor_num'].attrs['long_name'] = 'ADC board number'
         ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
@@ -303,7 +275,6 @@ if __name__ == '__main__':
         ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
         ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
         ds['raspi_cpu_serial'].attrs['long_name'] = 'Raspberry pi id number'
-        ds['offset'].attrs['long_name'] = 'sensor bias correction offset'
         comp_ds = compress_all(ds.isel(sample=slice(0, bump)))
         print(os.path.join(args.output, fileoutname))
         comp_ds.to_netcdf(os.path.join(args.output, fileoutname), engine='netcdf4')
