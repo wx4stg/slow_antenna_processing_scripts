@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+# Common function "library" for slow antenna processing scripts
+# Created 29 September 2025 by Sam Gardner <samuel.gardner@ttu.edu>
 
-import struct
 import numpy as np
 from datetime import datetime as dt
 
@@ -21,20 +22,11 @@ def parse_filename(filename):
             # this is an 'old old' file type
             out_dict['filename_spec'] = 1
             out_dict['dt'] = dt.strptime(filename, '%Y%m%d%H%M%S_%f.raw')
-            # out_dict['relay'] = None # TODO: figure this out from the SA_log.out or cronlog.txt or cronlog.out or data_collect.py, if available
-            # TODO: maybe read this info from some sort of user-provided csv and convert to a "2" or "3" spec filename automatically
-            # out_dict['lon'] = np.nan
-            # out_dict['lat'] = np.nan
-            # out_dict['alt'] = np.nan
-            # out_dict['gps_err'] = 0 # if there is no GPS data, the error is defined to be 0
-            # out_dict['cpu_id'] = np.nan
         case 3:
             # this is an 'old' file type
             out_dict['filename_spec'] = 2
             out_dict['dt'] = dt.strptime(rawfile_split[0]+rawfile_split[1], '%Y%m%d%H%M%S%f')
             out_dict['relay'] = rawfile_split[2]
-            # out_dict['gps_err'] = 0
-            # out_dict['cpu_id'] = np.nan
         case 9:
             # this is a current filename
             out_dict['filename_spec'] = 3
@@ -45,19 +37,10 @@ def parse_filename(filename):
             out_dict['gps_err'] = float(rawfile_split[6]) if ~np.isnan(out_dict['lon']) else 0
             out_dict['cpu_id'] = int(rawfile_split[7], 16)
             out_dict['relay'] = rawfile_split[8]
-        # case 6:
-        #     # This is a current file with no GPS... see https://github.com/wx4stg/Bruning_Slow_Antenna_Software/issues/3
-        #     out_dict['filename_spec'] = 3
-        #     out_dict['dt'] = dt.strptime(rawfile_split[0]+rawfile_split[1]+rawfile_split[2], '%Y%m%d%H%M%S%f')
-        #     out_dict['lat'] = np.nan
-        #     out_dict['lon'] = np.nan
-        #     out_dict['alt'] = np.nan
-        #     out_dict['gps_err'] = float(rawfile_split[3]) if ~np.isnan(out_dict['lon']) else 0
-        #     out_dict['cpu_id'] = int(rawfile_split[4], 16)
-        #     out_dict['relay'] = rawfile_split[5]
         case _:
             raise ValueError(f'Filename {filename} does not match any known filename specifications.')
     return out_dict
+
 
 def read_SA_file(file_to_read, packet_length=9, previous_file=None):
     with open(file_to_read, 'rb') as f:
@@ -90,6 +73,7 @@ def read_SA_file(file_to_read, packet_length=9, previous_file=None):
             print('First packet not recovered')
     return adc_packets
 
+
 def decode_SA_array(data_array):
     # Extract the ADC local clock and convert the hexadecimal value to base 10
     # ADC clock is sent as 4 bytes, least significant byte first, so multiply by 256^0, 256^1, 256^2, 256^3
@@ -97,56 +81,8 @@ def decode_SA_array(data_array):
     # Extract the ADC reading and convert to decimal.
     # The ADC reading is sent as 3 bytes, most significant byte first, so multiply by 256^2, 256^1, 256^0
     adc_reading_dec = np.sum(data_array[:, 1:4] * np.flip(256 ** np.arange(3)), axis=1)
-    # The ADC reading is sent as a signed 24-bit integer, so we need to convert it to a signed integer
+    # The ADC reading is sent as a unsigned 24-bit integer, so we need to convert it to a signed integer
     # If the ADC reading is greater than 2^23 - 1, then it is a negative number
     adc_reading_overflow_mask = adc_reading_dec > (2**23 - 1)
     adc_reading = adc_reading_dec - adc_reading_overflow_mask.astype(int) * (2**24)
-    
     return adc_pps_micros, adc_reading
-
-def convert_adc_to_decimal(value):
-    modulo = 1 << 24
-    max_value = (1 << 23) - 1
-    if value > max_value:
-        value -= modulo
-    return value
-
-
-def old_readSAfile(filepath):
-    data_raw_packets=[]
-    data_start_bytes = []
-    data_packet_length = 8
-    data_packets = []
-    this_packet_length = data_packet_length + 1
-    with open(filepath, mode = 'rb') as file:
-        ba = file.read()
-    for i in range(len(ba) - data_packet_length):
-        if (ba[i] == 190) and (ba[i+data_packet_length] == 239):
-            data_start_bytes.append(i)
-    data_raw_packets.extend([ba[sb:sb+this_packet_length] for sb in data_start_bytes[:-1]])
-    data_packets = [decode_data_packet(b) for b in data_raw_packets]
-    return data_packets    
-    
-def decode_data_packet(mp):
-    result = dict()
-    result['start_byte'] = struct.unpack('B', mp[0:1])[0]
-    result['b1'] = struct.unpack('B', mp[1:2])[0]
-    result['b2'] = struct.unpack('B', mp[2:3])[0]
-    result['b3'] = struct.unpack('B', mp[3:4])[0]
-    result['adc_pps_micros'] = struct.unpack('I', mp[4:8])[0]
-    result['end_byte'] = struct.unpack('B', mp[8:9])[0]
-    adc_ba = bytearray()
-    adc_ba += mp[1:2]
-    adc_ba += mp[2:3]
-    adc_ba += mp[3:4]
-    adc_ba += b'\x00'
-
-    adc_reading = struct.unpack('>i', adc_ba[:])[0]
-
-    adc_reading = mp[1]
-    adc_reading = (adc_reading << 8) | mp[2]
-    adc_reading = (adc_reading << 8) | mp[3]
-    adc_reading = convert_adc_to_decimal(adc_reading)
-
-    result['adc_reading'] = adc_reading
-    return result
