@@ -1,13 +1,12 @@
 import numpy as np
 import xarray as xr
-import datetime
-from glob import glob
+from pathlib import Path
 from scipy.signal import medfilt
 import pandas as pd
-from datetime import datetime
 import os
 import sa_common
 import argparse
+from dask.distributed import LocalCluster
 
 
 u4max = np.iinfo(np.uint32).max
@@ -151,142 +150,145 @@ def interpolate_across_system_times(ds, SAMPLE_RATE=9600):
 
 
 def add_other_time_vars(ds):
-    ds['dt_system'] = (ds.time_uncorrected-ds.time_uncorrected[0]).astype('datetime64[ns]').astype('f8')/1e9
+    ds['dt_system'] = (ds.time_uncorrected-ds.time_uncorrected[0]).astype('timedelta64[ns]').astype('f8')/1e9
     ds['dt_adc'] = (ds.pps_micro - ds.pps_micro[0]).astype('f8')/1e6
     return ds
+
+
+def read_single_file(file_info, sample_rate, total_rollovers=0, previous_filepath=None):
+    data_packets = sa_common.read_SA_file(file_info['path'], previous_file=previous_filepath)
+    pps_micros, adc_reading = sa_common.decode_SA_array(data_packets)
+    unrolled_micros, rollovers = correct_micros(pps_micros, sample_rate)
+    unrolled_micros = unrolled_micros + total_rollovers*u4max
+    time_orig = np.array([file_info['dt']]).astype('datetime64[us]') + (unrolled_micros - unrolled_micros[0]).astype('timedelta64[us]')
+    return unrolled_micros, adc_reading, time_orig, rollovers
+
+
+def process_file_pair(file_info_1, file_info_2, output_dir, previous_filepath=None, SAMPLE_RATE=9600):
+    # Read and decode raw data
+    unrolled_micros_1, adc_reading_1, time_orig_1, rollovers_1 = read_single_file(file_info_1,
+                                                                                  sample_rate=SAMPLE_RATE,
+                                                                                  total_rollovers=0,
+                                                                                  previous_filepath=previous_filepath)
+    unrolled_micros_2, adc_reading_2, time_orig_2, _ = read_single_file(file_info_2,
+                                                                                  sample_rate=SAMPLE_RATE,
+                                                                                  total_rollovers=rollovers_1,
+                                                                                  previous_filepath=file_info_1['path'])
+    unrolled_micros = np.concatenate((unrolled_micros_1, unrolled_micros_2))
+    adc_reading = np.concatenate((adc_reading_1, adc_reading_2))
+    time_orig = np.concatenate((time_orig_1, time_orig_2))
+
+    ds = xr.Dataset(pd.DataFrame(
+            {'ADC':adc_reading,
+             'pps_micro':unrolled_micros,
+             'time_uncorrected':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
+    ds = interpolate_across_system_times(add_other_time_vars(ds))
+    sensor_num = file_info_1['sensor_num']
+    sensor_lat = file_info_1['lat']
+    sensor_lon = file_info_1['lon']
+    sensor_alt = file_info_1['alt']
+    sensor_relay = file_info_1['relay']
+    this_dt = file_info_1['dt']
+    fileoutname = f'SA{sensor_num}_{this_dt.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
+    ds = ds.assign_coords({'sensor_num' : [sensor_num]})        
+    match sensor_relay:
+        case 'a':
+            sensor_relay = 0
+        case 'b':
+            sensor_relay = 1
+        case 'c':
+            sensor_relay = 2
+        case _:
+            raise ValueError(f'Unknown relay: {sensor_relay}')
+    
+    cpu_serial = hex(file_info_1['cpu_id'])
+    ds = ds.assign(
+        lat = ('sensor_num', np.array([sensor_lat])),
+        lon = ('sensor_num', np.array([sensor_lon])),
+        alt = ('sensor_num', np.array([sensor_alt])),
+        raspi_cpu_serial = ('sensor_num', np.array([cpu_serial],dtype=f'S{len(cpu_serial)}')),
+        relay = ('sensor_num', np.array([sensor_relay]))
+    )
+    ds['sensor_num'].attrs['long_name'] = 'ADC board number'
+    ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
+    ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
+    ds['pps_micro'].attrs['units'] = 'microseconds'
+    ds['time_uncorrected'].attrs['long_name'] = 'Time reported by the ADC clock'
+    ds['time'].attrs['long_name'] = 'Time of the ADC sample in UTC, corrected for system time errors'
+    ds['dt_system'].attrs['long_name'] = 'Time offset of the Linux system clock, relative to the first sample'
+    ds['dt_system'].attrs['units'] = 'seconds'
+    ds['dt_adc'].attrs['long_name'] = 'Time offset of the ADC local reference clock, relative to the first sample'
+    ds['dt_adc'].attrs['units'] = 'seconds'
+    ds['lat'].attrs['long_name'] = 'Latitude of the sensor'
+    ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
+    ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
+    ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
+    ds['raspi_cpu_serial'].attrs['long_name'] = 'Raspberry pi id number'
+    comp_ds = compress_all(ds.isel(sample=slice(0, len(adc_reading_1))))
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    print(os.path.join(output_dir, fileoutname))
+    comp_ds.to_netcdf(os.path.join(output_dir, fileoutname), engine='netcdf4')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
     parser.add_argument('-i', '--input', nargs='+', required=True, help='Path or paths to slow antenna files to convert.')
-    parser.add_argument('-s', '--sensor_num', required=True,help='The ADC board number of the sensor that collected the data.', type=int)
-    parser.add_argument('--latitude', type=float, help='Latitude of the sensor. Overridden if the latitude is present in the file name.')
-    parser.add_argument('--longitude', type=float, help='Longitude of the sensor. Overridden if the longitude is present in the file name.')
-    parser.add_argument('--altitude', type=float, help='Altitude of the sensor. Overridden if the altitude is present in the file name.')
-    parser.add_argument('-r', '--relay', help='Relay used (a/b/c). Overridden if the relay is present in the file name.', type=str)
     parser.add_argument('-o', '--output', required=True, help='Directory to save netCDF output files.')
+    parser.add_argument('-m', '--hardware-metadata', default='./hardware.csv', help='Path to a CSV file containing hardware metadata history for the sensor network.')
     parser.add_argument('--sample-rate', type=int, default=9600, help='Sample rate of the ADC in samples/second. Default is 9600.')
     args = parser.parse_args()
 
     SAMPLE_RATE = args.sample_rate
-    files = args.input
-    # sort input files by filename (should be in time order)
-    if len(files) == 1:
-        files = glob(files[0])
-    else:
-        files = files
-    files = sorted(files)
-
-    # Count of all rollovers
-    total_rollovers = 0
-    bump = 0
-
-    for idx, filepath in enumerate(files):
-        sensor_lat = args.latitude if args.latitude else np.nan
-        sensor_lon = args.longitude if args.longitude else np.nan
-        sensor_alt = args.altitude if args.altitude else np.nan
-        sensor_relay = args.relay if args.relay else np.nan
-        filename = os.path.basename(filepath)
-        file_metadata = sa_common.parse_filename(filename)
-        T1 = file_metadata['dt']
-        if 'lat' in file_metadata:
-            sensor_lat = file_metadata['lat']
-        if 'lon' in file_metadata:
-            sensor_lon = file_metadata['lon']
-        if 'alt' in file_metadata:
-            sensor_alt = file_metadata['alt']
-        if 'relay' in file_metadata:
-            sensor_relay = file_metadata['relay']
-        # Read and decode raw data
-        if idx == 0:
-            last_file = None
-        else:
-            last_file = files[idx-1]
-        if os.path.getsize(filepath) == 0:
-            print(f"File {filepath} is empty, skipping.")
+    files_input = args.input
+    files = []
+    filenames = []
+    file_metadata_list = []
+    for f in files_input:
+        if os.path.getsize(f) == 0:
+            print(f"Warning: File {f} is empty and will be skipped.")
             continue
-        data_packets = sa_common.read_SA_file(filepath, previous_file=last_file)
-        adc_pps_micros, adc_reading = sa_common.decode_SA_array(data_packets)
-        # Detect negative steps in this file, and cleanup noise spikes in ADC's time counter
-        adc_ready, new_rolls = correct_micros(adc_pps_micros, SAMPLE_RATE)
-        # Add on the cumulative rollovers from previous files
-        adc_ready += total_rollovers*u4max
-        total_rollovers += new_rolls
-
-
-        time_orig = T1 + (adc_ready-adc_ready[0]).astype('timedelta64[us]').astype('O')
-
-        # Sensor measurements from the ADC. 24 bit sensor, so 32 bit int will be fine.
-        adc = np.asarray(adc_reading).astype('int32')
-        if bump == 0:
-            bump = len(adc)
-            adc_prev = adc
-            time_orig_prev = time_orig
-            pps_micro_prev = adc_ready
-            T0 = T1
-            #There's nothing to subtract, so we don't write out the file
-            continue
-        
+        files.append(f)
+        fn = os.path.basename(f)
+        filenames.append(fn)
+        file_metadata_list.append(sa_common.parse_filename(fn))
+    hardware_df = pd.read_csv(args.hardware_metadata, parse_dates=['start_dt', 'end_dt'])
+    for i, fm in enumerate(file_metadata_list):
+        fm['filename'] = filenames[i]
+        fm['path'] = files[i]
+        fm['cpu_id_hex'] = hex(fm['cpu_id'])
+        hw_metadata = hardware_df[(hardware_df['cpu_serial'] == fm['cpu_id_hex']) & (hardware_df['start_dt'] <= fm['dt']) & (hardware_df['end_dt'] >= fm['dt'])]
+        if len(hw_metadata) != 1:
+            print(f"Warning: Could not find unique hardware metadata for file {filenames[i]}. Found {len(hw_metadata)} matches. Calibration metadata will not be applied for this file.")
         else:
+            fm['sensor_num'] = hw_metadata['sensor_num'].values[0]
+            fm['geo_cal_scale'] = hw_metadata['geo_cal_scale'].values[0]
+            fm['mass_cal_offset'] = hw_metadata['mass_cal_offset'].values[0]
+            relay_in_use = fm['relay']
+            fm['resistor_ohms'] = hw_metadata[f'channel_{relay_in_use}_resistor_ohms'].values[0]
+            fm['capacitor_farads'] = hw_metadata[f'channel_{relay_in_use}_capacitor_farads'].values[0]
+            fm['RC_constant'] = hw_metadata[f'channel_{relay_in_use}_RC_const_seconds'].values[0]
+            fm['gain'] = hw_metadata[f'channel_{relay_in_use}_gain'].values[0]
+            fm['static_cal_offset'] = hw_metadata[f'static_cal_offset_channel_{relay_in_use}'].values[0]
+            fm['static_cal_scale'] = hw_metadata[f'static_cal_scale_channel_{relay_in_use}'].values[0]
+    # sort files by datetime extracted from filename
+    all_dts = [fm['dt'] for fm in file_metadata_list]
+    sorted_indices = np.argsort(all_dts)
+    file_metadata_list = [file_metadata_list[i] for i in sorted_indices]
 
-            adc_2file = np.concatenate((adc_prev,adc))
-            time_orig_2file = np.concatenate((time_orig_prev, time_orig))
-            pps_micro_2file = np.concatenate((pps_micro_prev,adc_ready))
-
-
-        ds = xr.Dataset(pd.DataFrame(
-            {'ADC':adc_2file,
-             'pps_micro':pps_micro_2file,
-             'time_uncorrected':time_orig_2file})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
-
-        ds = interpolate_across_system_times(add_other_time_vars(ds))
-        fileoutname = f'SA{args.sensor_num}_{T0.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
-        ds = ds.assign_coords({'sensor_num' : [args.sensor_num]})        
-        match sensor_relay:
-            case 'a':
-                sensor_relay = 0
-            case 'b':
-                sensor_relay = 1
-            case 'c':
-                sensor_relay = 2
-            case _:
-                raise ValueError(f'Unknown relay: {sensor_relay}')
-        
-        cpu_serial = hex(file_metadata['cpu_id'])
-        ds = ds.assign(
-            lat = ('sensor_num', np.array([sensor_lat])),
-            lon = ('sensor_num', np.array([sensor_lon])),
-            alt = ('sensor_num', np.array([sensor_alt])),
-            raspi_cpu_serial = ('sensor_num', np.array([cpu_serial],dtype=f'S{len(cpu_serial)}')),
-            relay = ('sensor_num', np.array([sensor_relay]))
-        )
-        ds['sensor_num'].attrs['long_name'] = 'ADC board number'
-        ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
-        ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
-        ds['pps_micro'].attrs['units'] = 'microseconds'
-        ds['time_uncorrected'].attrs['long_name'] = 'Time reported by the ADC clock'
-        ds['time'].attrs['long_name'] = 'Time of the ADC sample in UTC, corrected for system time errors'
-        ds['dt_system'].attrs['long_name'] = 'Time offset of the Linux system clock, relative to the first sample'
-        ds['dt_system'].attrs['units'] = 'seconds'
-        ds['dt_adc'].attrs['long_name'] = 'Time offset of the ADC local reference clock, relative to the first sample'
-        ds['dt_adc'].attrs['units'] = 'seconds'
-        ds['lat'].attrs['long_name'] = 'Latitude of the sensor'
-        ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
-        ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
-        ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
-        ds['raspi_cpu_serial'].attrs['long_name'] = 'Raspberry pi id number'
-        comp_ds = compress_all(ds.isel(sample=slice(0, bump)))
-        print(os.path.join(args.output, fileoutname))
-        comp_ds.to_netcdf(os.path.join(args.output, fileoutname), engine='netcdf4')
-        
-        
-        bump = len(adc)
-        # write out the first file, then update bump, then update _prev filenames. 
-
-        adc_prev = adc
-        time_orig_prev = time_orig
-        pps_micro_prev = adc_ready
-        T0 = T1
-
-#Note, the call for may look something like this:
-#python nc_conversion.py -i /20250602_145*.raw -s 1 -o /Users/kelcy/PYTHON/slow_antenna_processing_scripts/
+    n_cpus_to_use = os.cpu_count()//2
+    cluster = LocalCluster(n_workers=n_cpus_to_use, threads_per_worker=1)
+    client = cluster.get_client()
+    all_res = []
+    all_res.append(client.submit(process_file_pair, file_metadata_list[0],
+                      file_metadata_list[1],
+                      args.output,
+                      previous_filepath=None,
+                      SAMPLE_RATE=SAMPLE_RATE))
+    for i in range(2, len(file_metadata_list)):
+        all_res.append(client.submit(process_file_pair, file_metadata_list[i-1],
+                                    file_metadata_list[i],
+                                    args.output,
+                                    previous_filepath=file_metadata_list[i-2]['path'],
+                          SAMPLE_RATE=SAMPLE_RATE))
+    client.gather(all_res)
+    client.close()
