@@ -81,8 +81,8 @@ def decode_SA_array(data_array):
     # Extract the ADC reading and convert to decimal.
     # The ADC reading is sent as 3 bytes, most significant byte first, so multiply by 256^2, 256^1, 256^0
     adc_reading_dec = np.sum(data_array[:, 1:4] * np.flip(256 ** np.arange(3)), axis=1)
-    # The ADC reading is sent as a unsigned 24-bit integer, so we need to convert it to a signed integer
+    # The ADC reading is sent as an unsigned 24-bit integer, so we need to convert it to a signed 23-bit integer
     # If the ADC reading is greater than 2^23 - 1, then it is a negative number
     adc_reading_overflow_mask = adc_reading_dec > (2**23 - 1)
     adc_reading = adc_reading_dec - adc_reading_overflow_mask.astype(int) * (2**24)
-    return adc_pps_micros, adc_reading
+    return adc_pps_micros, adc_reading.astype(np.int32)
