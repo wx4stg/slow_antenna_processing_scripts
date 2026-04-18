@@ -183,6 +183,8 @@ def process_file_pair(file_info_1, file_info_2, output_dir, previous_filepath=No
              'pps_micro':unrolled_micros,
              'time_uncorrected':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
     ds = interpolate_across_system_times(add_other_time_vars(ds))
+    ds = ds.drop_vars(['dt_system', 'dt_adc', 'pps_micro', 'time_uncorrected'])
+    ds = ds.sortby('time')
     sensor_num = file_info_1['sensor_num']
     sensor_lat = file_info_1['lat']
     sensor_lon = file_info_1['lon']
@@ -190,7 +192,7 @@ def process_file_pair(file_info_1, file_info_2, output_dir, previous_filepath=No
     sensor_relay = file_info_1['relay']
     this_dt = file_info_1['dt']
     fileoutname = f'SA{sensor_num}_{this_dt.strftime("%Y-%m-%d_%H-%M-%S")}.nc'
-    ds = ds.assign_coords({'sensor_num' : [sensor_num]})        
+    ds = ds.assign_coords({'sensor_num' : np.array([sensor_num], dtype='i4')})        
     match sensor_relay:
         case 'a':
             sensor_relay = 0
@@ -203,27 +205,49 @@ def process_file_pair(file_info_1, file_info_2, output_dir, previous_filepath=No
     
     cpu_serial = hex(file_info_1['cpu_id'])
     ds = ds.assign(
-        lat = ('sensor_num', np.array([sensor_lat])),
-        lon = ('sensor_num', np.array([sensor_lon])),
-        alt = ('sensor_num', np.array([sensor_alt])),
+        lat = ('sensor_num', np.array([sensor_lat], dtype='float32')),
+        lon = ('sensor_num', np.array([sensor_lon], dtype='float32')),
+        alt = ('sensor_num', np.array([sensor_alt], dtype='float32')),
         raspi_cpu_serial = ('sensor_num', np.array([cpu_serial],dtype=f'S{len(cpu_serial)}')),
-        relay = ('sensor_num', np.array([sensor_relay]))
+        relay = ('sensor_num', np.array([sensor_relay], dtype='i4')),
+        gps_err = ('sensor_num', np.array([file_info_1['gps_err']], dtype='float32')),
+        geo_cal_scale = ('sensor_num', np.array([file_info_1['geo_cal_scale']], dtype='float32')),
+        mass_cal_offset = ('sensor_num', np.array([file_info_1['mass_cal_offset']], dtype='float32')),
+        resistor_ohms = ('sensor_num', np.array([file_info_1['resistor_ohms']], dtype='float32')),
+        capacitor_farads = ('sensor_num', np.array([file_info_1['capacitor_farads']], dtype='float32')),
+        RC_constant = ('sensor_num', np.array([file_info_1['RC_constant']], dtype='float32')),
+        gain = ('sensor_num', np.array([file_info_1['gain']], dtype='float32')),
+        static_cal_offset = ('sensor_num', np.array([file_info_1['static_cal_offset']], dtype='float32')),
+        static_cal_scale = ('sensor_num', np.array([file_info_1['static_cal_scale']], dtype='float32'))
     )
-    ds['sensor_num'].attrs['long_name'] = 'ADC board number'
-    ds['ADC'].attrs['long_name'] = 'Slow antenna ADC reading'
-    ds['pps_micro'].attrs['long_name'] = 'ADC local reference clock time, corrected for rollover'
-    ds['pps_micro'].attrs['units'] = 'microseconds'
-    ds['time_uncorrected'].attrs['long_name'] = 'Time reported by the ADC clock'
-    ds['time'].attrs['long_name'] = 'Time of the ADC sample in UTC, corrected for system time errors'
-    ds['dt_system'].attrs['long_name'] = 'Time offset of the Linux system clock, relative to the first sample'
-    ds['dt_system'].attrs['units'] = 'seconds'
-    ds['dt_adc'].attrs['long_name'] = 'Time offset of the ADC local reference clock, relative to the first sample'
-    ds['dt_adc'].attrs['units'] = 'seconds'
+    adc_var_long_name = 'Slow antenna ADC reading, raw'
+    if ~np.isnan(file_info_1['mass_cal_offset']):
+        adc_var_long_name = adc_var_long_name.replace('raw', 'noise floor adjusted to 0 by mass calibration')
+        voltage_scaling = (5 / ((2**24) - 1))
+        ds['ADC'] = (ds['ADC'].astype('float64') + file_info_1['mass_cal_offset']) * voltage_scaling
+        voltage_offset = file_info_1['mass_cal_offset'] * voltage_scaling
+        ds['ADC'].encoding['add_offset'] = voltage_offset
+        ds['ADC'].encoding['scale_factor'] = voltage_scaling
+        ds['ADC'].encoding['dtype'] = 'int32'
+        ds['ADC'].encoding['_FillValue'] = -(2**31)
+        ds['ADC'].attrs['units'] = 'volts'
+    else:
+        ds['ADC'].attrs['units'] = 'bits'
+    ds['ADC'].attrs['long_name'] = adc_var_long_name
+    ds['time'].attrs['long_name'] = 'Time of the ADC sample in UTC'
     ds['lat'].attrs['long_name'] = 'Latitude of the sensor'
     ds['lon'].attrs['long_name'] = 'Longitude of the sensor'
     ds['alt'].attrs['long_name'] = 'Altitude of the sensor'
-    ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
     ds['raspi_cpu_serial'].attrs['long_name'] = 'Raspberry pi id number'
+    ds['relay'].attrs['long_name'] = 'Active relay of the ADC, 0=a, 1=b, 2=c'
+    ds['gps_err'].attrs['long_name'] = 'Time in seconds since last GPS fix'
+    ds['geo_cal_scale'].attrs['long_name'] = 'Geometric calibration scale factor for this sensor'
+    ds['mass_cal_offset'].attrs['long_name'] = 'Mass calibration offset for this sensor'
+    ds['resistor_ohms'].attrs['long_name'] = 'Resistance in ohms of the RC circuit'
+    ds['capacitor_farads'].attrs['long_name'] = 'Capacitance in farads of the RC circuit'
+    ds['RC_constant'].attrs['long_name'] = 'Time constant in seconds of the RC circuit'
+    ds['gain'].attrs['long_name'] = 'Gain of the channel in use relative to other channels'
+    ds['sensor_num'].attrs['long_name'] = 'ADC board number'
     comp_ds = compress_all(ds.isel(sample=slice(0, len(adc_reading_1))))
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     print(os.path.join(output_dir, fileoutname))
