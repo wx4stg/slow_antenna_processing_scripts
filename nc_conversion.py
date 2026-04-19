@@ -1,3 +1,4 @@
+from glob import glob
 import numpy as np
 import xarray as xr
 from pathlib import Path
@@ -256,14 +257,18 @@ def process_file_pair(file_info_1, file_info_2, output_dir, previous_filepath=No
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Slow Antenna .raw data')
-    parser.add_argument('-i', '--input', nargs='+', required=True, help='Path or paths to slow antenna files to convert.')
+    parser.add_argument('-i', '--input', nargs='+', help='Path or paths to slow antenna files to convert.')
     parser.add_argument('-o', '--output', help='Directory to save netCDF output files. If unspecified, will save in a "processed" subdirectory of the directory of the input files.')
     parser.add_argument('-m', '--hardware-metadata', default='./hardware.csv', help='Path to a CSV file containing hardware metadata history for the sensor network.')
     parser.add_argument('--sample-rate', type=int, default=9600, help='Sample rate of the ADC in samples/second. Default is 9600.')
     args = parser.parse_args()
 
+        
     SAMPLE_RATE = args.sample_rate
-    files_input = args.input
+    if args.input is not None:
+        files_input = args.input
+    else:
+        files_input = sorted(glob('./input/**/*.raw', recursive=True))
     files = []
     filenames = []
     file_metadata_list = []
