@@ -267,18 +267,22 @@ if __name__ == '__main__':
     files = []
     filenames = []
     file_metadata_list = []
+    file_sizes = []
     for f in files_input:
-        if os.path.getsize(f) == 0:
+        file_size = os.path.getsize(f)
+        if file_size == 0:
             print(f"Warning: File {f} is empty and will be skipped.")
             continue
         files.append(f)
         fn = os.path.basename(f)
         filenames.append(fn)
         file_metadata_list.append(sa_common.parse_filename(fn))
+        file_sizes.append(file_size)
     hardware_df = pd.read_csv(args.hardware_metadata, parse_dates=['start_dt', 'end_dt'])
     for i, fm in enumerate(file_metadata_list):
         fm['filename'] = filenames[i]
         fm['path'] = files[i]
+        fm['size_bytes'] = file_sizes[i]
         fm['cpu_id_hex'] = hex(fm['cpu_id'])
         hw_metadata = hardware_df[(hardware_df['cpu_serial'] == fm['cpu_id_hex']) & (hardware_df['start_dt'] <= fm['dt']) & (hardware_df['end_dt'] >= fm['dt'])]
         if len(hw_metadata) != 1:
@@ -294,33 +298,50 @@ if __name__ == '__main__':
             fm['gain'] = hw_metadata[f'channel_{relay_in_use}_gain'].values[0]
             fm['static_cal_offset'] = hw_metadata[f'static_cal_offset_channel_{relay_in_use}'].values[0]
             fm['static_cal_scale'] = hw_metadata[f'static_cal_scale_channel_{relay_in_use}'].values[0]
+    file_metadata_df = pd.DataFrame(file_metadata_list)
     # sort files by datetime extracted from filename
-    all_dts = [fm['dt'] for fm in file_metadata_list]
-    sorted_indices = np.argsort(all_dts)
-    file_metadata_list = [file_metadata_list[i] for i in sorted_indices]
+    file_metadata_df = file_metadata_df.sort_values('dt').reset_index(drop=True)
+    # 9 bytes per sample, 9600 samples/second, so compute the expected time of the next file, with a 10% tolerance
+    bytes_per_message = np.zeros(len(file_metadata_df), dtype='i8')
+    bytes_per_message[file_metadata_df['filename_spec'] <= 3] = 9
+    expected_file_interval = (file_metadata_df['size_bytes'] / (bytes_per_message * SAMPLE_RATE)) * 1.1
+    file_metadata_df['expected_next_dt'] = file_metadata_df['dt'] + pd.to_timedelta(expected_file_interval, unit='s')
 
+    # Group by sensor number
+    all_sensors_metadata_df = [group.reset_index(drop=True) for _, group in file_metadata_df.groupby('cpu_id_hex')]
+    # setup dask for parallel processing
     n_cpus_to_use = os.cpu_count()//2
     cluster = LocalCluster(n_workers=n_cpus_to_use, threads_per_worker=1)
     client = cluster.get_client()
     all_res = []
-    if args.output is None:
-        output_dir = os.path.join(os.path.dirname(file_metadata_list[0]['path']), 'processed')
-    else:
-        output_dir = args.output
-    all_res.append(client.submit(process_file_pair, file_metadata_list[0],
-                      file_metadata_list[1],
-                      output_dir,
-                      previous_filepath=None,
-                      SAMPLE_RATE=SAMPLE_RATE))
-    for i in range(2, len(file_metadata_list)):
-        if args.output is None:
-            output_dir = os.path.join(os.path.dirname(file_metadata_list[i]['path']), 'processed')
-        else:
-            output_dir = args.output
-        all_res.append(client.submit(process_file_pair, file_metadata_list[i-1],
-                                    file_metadata_list[i],
-                                    output_dir,
-                                    previous_filepath=file_metadata_list[i-2]['path'],
-                          SAMPLE_RATE=SAMPLE_RATE))
+    for this_sensor_metadata_df in all_sensors_metadata_df:
+        # Group by sensor deployment, continouous periods of time where each 'next file' is recorded immediately after the previous (with some tolerance)
+        deployment_idx = this_sensor_metadata_df['expected_next_dt'].shift(1) < this_sensor_metadata_df['dt']
+        this_sensor_metadata_df['deployment_idx'] = deployment_idx.cumsum()
+        all_deployments_metadata_df = [group.reset_index(drop=True) for _, group in this_sensor_metadata_df.groupby('deployment_idx')]
+        # Process each deployment in parallel, with dask. Each deployment is a set of files that are continouous in time, so we can use the end of one file to correct the next.
+        for this_deployment_metadata_df in all_deployments_metadata_df:
+            # Find output dir if unspecified, then submit the processing job to dask.
+            if args.output is None:
+                output_dir = os.path.join(os.path.dirname(this_deployment_metadata_df.iloc[0]['path']), 'processed')
+            else:
+                output_dir = args.output
+            # For the first file in the deployment, there is no previous file to use for correction, so set previous_filepath to None. 
+            all_res.append(client.submit(process_file_pair, this_deployment_metadata_df.iloc[0],
+                            this_deployment_metadata_df.iloc[1],
+                            output_dir,
+                            previous_filepath=None,
+                            SAMPLE_RATE=SAMPLE_RATE))
+            # For subsequent files, use the previous file in the deployment.
+            for i in range(2, len(this_deployment_metadata_df)):
+                if args.output is None:
+                    output_dir = os.path.join(os.path.dirname(this_deployment_metadata_df.iloc[i]['path']), 'processed')
+                else:
+                    output_dir = args.output
+                all_res.append(client.submit(process_file_pair, this_deployment_metadata_df.iloc[i-1],
+                                            this_deployment_metadata_df.iloc[i],
+                                            output_dir,
+                                            previous_filepath=this_deployment_metadata_df.iloc[i-2]['path'],
+                                SAMPLE_RATE=SAMPLE_RATE))
     client.gather(all_res)
     client.close()
