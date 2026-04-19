@@ -14,25 +14,6 @@ import pandas as pd
 import h5py
 from pyxlma import coords
 
-parser = argparse.ArgumentParser(description='Slow antenna archive pruning and sorting.')
-parser.add_argument('--unsorted-files', '-u', type=str, required=True, default='/mnt/reservoir/SA_DATA_UNSORTED/SA_DATA/', help='Top level directory of unsorted slow antenna data.')
-parser.add_argument('--archive-root', '-r', type=str, default='/mnt/reservoir/SA_DATA/', help='Top level directory of slow antenna data archive.')
-parser.add_argument('--lma-data', '-l', type=str, default=None, help='Directory containing LMA data for correlation with slow antenna data. On rime as of Oct. 2025, this is "/archive/lmaclimo/h5_files/". Leave unspecified to skip pruning.')
-parser.add_argument('--trigger', '-t', action='store_true', default=False, help='Whether to prune based on the presence of lightning impulses in the slow antenna data.')
-parser.add_argument('--dry-run', '-n', action='store_true', help='Log actions without making any changes.')
-parser.add_argument('--cpu-serial-log', '-c', type=str, default=None, help='Path to a CSV file logging CPU serial numbers and their associated sensor numbers and deployment dates. Leave unspecified to skip.')
-parser.add_argument('--history-file', type=str, help='Path to a CSV file logging the history of previous deployments that collected \'old old\' or \'old\' data. Files with data collection dates that fall within the date ranges of these deployments will be renamed to the current filename specification and sorted into the archive according to their collection date and sensor number.')
-parser.add_argument('--debug-dataframe', '-d', type=str, default=None, help='Path to write the dataframe containing all parsed filename information and pruning decisions to a CSV for debugging purposes. Leave unspecified to skip.')
-
-
-args = parser.parse_args()
-if not args.dry_run:
-    print('----> FILESYSTEM CHANGES CAN BE PERFORMED <----')
-    from shutil import copyfile
-    from time import sleep
-    from zlib import crc32
-    print('----> Press CTRL + C in the next 5 seconds to abort! <----')
-    sleep(5)
 
 def copy_file(old_path, new_path, reason=None, dry_run=True):
     if old_path == new_path:
@@ -202,6 +183,22 @@ def sort_files(filenames_parsed, archive_root):
         new_path = path.join(archive_root, f'{parsed["dt"].strftime("%Y%m%d")}', f'sensor_{str(int(parsed["sensor_num"])).zfill(2)}', 
                                 f'{parsed["dt"].strftime("%Y%m%d_%H%M%S_%f")}_{this_lat}_{this_lon}_{this_alt}_{this_gps_err}_{this_cpu_id}_{this_relay}.raw')
         copy_file(old_raw_path, new_path, dry_run=args.dry_run)
+        print(f'Processed file {i+1} of {files_to_move.shape[0]}')
+
+
+def move_log_files(unsorted_files_dir, archive_root):
+    log_files = glob(path.join(unsorted_files_dir, '**', 'SA_log.out'), recursive=True)
+    log_files += glob(path.join(unsorted_files_dir, '**', 'cronjobs_help.sh'), recursive=True)
+    log_files += glob(path.join(unsorted_files_dir, '**', 'cronlog.txt'), recursive=True)
+    log_files += glob(path.join(unsorted_files_dir, '**', 'cronlog.out'), recursive=True)
+    log_files += glob(path.join(unsorted_files_dir, '**', 'data_collect.py'), recursive=True)
+    log_files += glob(path.join(unsorted_files_dir, '**', 'temperature_log.csv'), recursive=True)
+    for log_file in log_files:
+        new_path = log_file.replace(unsorted_files_dir, archive_root)
+        if path.exists(path.dirname(new_path)):
+            copy_file(log_file, new_path, reason='log file', dry_run=args.dry_run)
+        else:
+            unhandleable_file(f'Could not find destination directory for log file {log_file}. Expected to find {path.dirname(new_path)}. Please resolve this issue manually.', dry_run=args.dry_run)
 
 
 def filter_lma(filenames_parsed, lma_data_path):
@@ -263,6 +260,24 @@ def filter_empty(filenames_parsed):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Slow antenna archive pruning and sorting.')
+    parser.add_argument('--unsorted-files', '-u', type=str, required=True, default='/mnt/reservoir/SA_DATA_UNSORTED/SA_DATA/', help='Top level directory of unsorted slow antenna data.')
+    parser.add_argument('--archive-root', '-r', type=str, default='/mnt/reservoir/SA_DATA/', help='Top level directory of slow antenna data archive.')
+    parser.add_argument('--lma-data', '-l', type=str, default=None, help='Directory containing LMA data for correlation with slow antenna data. On rime as of Oct. 2025, this is "/archive/lmaclimo/h5_files/". Leave unspecified to skip pruning.')
+    parser.add_argument('--trigger', '-t', action='store_true', default=False, help='Whether to prune based on the presence of lightning impulses in the slow antenna data.')
+    parser.add_argument('--dry-run', '-n', action='store_true', help='Log actions without making any changes.')
+    parser.add_argument('--cpu-serial-log', '-c', type=str, default=None, help='Path to a CSV file logging CPU serial numbers and their associated sensor numbers and deployment dates. Leave unspecified to skip.')
+    parser.add_argument('--history-file', type=str, help='Path to a CSV file logging the history of previous deployments that collected \'old old\' or \'old\' data. Files with data collection dates that fall within the date ranges of these deployments will be renamed to the current filename specification and sorted into the archive according to their collection date and sensor number.')
+    parser.add_argument('--debug-dataframe', '-d', type=str, default=None, help='Path to write the dataframe containing all parsed filename information and pruning decisions to a CSV for debugging purposes. Leave unspecified to skip.')
+
+    args = parser.parse_args()
+    if not args.dry_run:
+        print('----> FILESYSTEM CHANGES CAN BE PERFORMED <----')
+        from shutil import copyfile
+        from time import sleep
+        from zlib import crc32
+        print('----> Press CTRL + C in the next 5 seconds to abort! <----')
+        sleep(5)
     # Read history, if provided
     if args.history_file is not None:
         history_df = pd.read_csv(args.history_file, parse_dates=['start_date', 'end_date'])
@@ -288,9 +303,11 @@ if __name__ == '__main__':
     if args.trigger:
         filenames_parsed = filter_triggers(filenames_parsed)
         filenames_parsed['keep'] = filenames_parsed['keep'] & ~filenames_parsed['filtered_by_trigger']
+    filenames_parsed = filenames_parsed.sort_values('dt').reset_index(drop=True)
     sort_files(filenames_parsed, args.archive_root)
     if args.debug_dataframe is not None:
         if args.debug_dataframe.endswith('.csv'):
             filenames_parsed.to_csv(args.debug_dataframe, index=False)
         elif args.debug_dataframe.endswith('.parquet'):
             filenames_parsed.to_parquet(args.debug_dataframe, index=False)
+    move_log_files(args.unsorted_files, args.archive_root)
