@@ -37,8 +37,6 @@ if __name__ == '__main__':
     adc = np.concatenate(all_data, axis=0)
     adc_ready = np.concatenate(all_times, axis=0)
 
-    adc_ready = signal.medfilt(np.array(adc_ready), 7)
-    adc = signal.medfilt(np.array(adc), 7)
     delta_t_adc = (adc_ready[-1]-adc_ready[0])*1e-6
     sample_rate = 1.0e6/np.median(np.ediff1d(adc_ready))
     print(
