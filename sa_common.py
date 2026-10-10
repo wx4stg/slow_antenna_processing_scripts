@@ -117,10 +117,10 @@ def read_SA_file(file_to_read, packet_length=9, previous_file=None):
 def decode_SA_array(data_array):
     # Extract the ADC local clock and convert the hexadecimal value to base 10
     # ADC clock is sent as 4 bytes, least significant byte first, so multiply by 256^0, 256^1, 256^2, 256^3
-    adc_pps_micros = np.sum(data_array[:, 4:8] * (256 ** np.arange(4)), axis=1)
+    adc_micros = np.sum(data_array[:, 4:8] * (256 ** np.arange(4)), axis=1)
     # The feather's micros() function has a race condition where the us place can go from 999 to 0 before the ms place increments, so we need to correct for that
-    race_condition_indices = np.nonzero(np.diff(adc_pps_micros) < -500)[0] + 1
-    adc_pps_micros[race_condition_indices] += 1000
+    race_condition_indices = np.nonzero(np.diff(adc_micros) < -500)[0] + 1
+    adc_micros[race_condition_indices] += 1000
     # Extract the ADC reading and convert to decimal.
     # The ADC reading is sent as 3 bytes, most significant byte first, so multiply by 256^2, 256^1, 256^0
     adc_reading_dec = np.sum(data_array[:, 1:4] * np.flip(256 ** np.arange(3)), axis=1)
@@ -128,7 +128,7 @@ def decode_SA_array(data_array):
     # If the ADC reading is greater than 2^23 - 1, then it is a negative number
     adc_reading_overflow_mask = adc_reading_dec > (2**23 - 1)
     adc_reading = adc_reading_dec - adc_reading_overflow_mask.astype(int) * (2**24)
-    return adc_pps_micros, adc_reading.astype(np.int32)
+    return adc_micros, adc_reading.astype(np.int32)
 
 def decode_lsb_metadata(micros, adc_reading):
     # Decode metadata from hidden LSB data stream in ADC reading.
